@@ -1,0 +1,73 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '3.5.4'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.example'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-data-neo4j'
+	compileOnly 'org.projectlombok:lombok'
+	developmentOnly 'org.springframework.boot:spring-boot-devtools'
+	annotationProcessor 'org.projectlombok:lombok'
+	testCompileOnly 'org.projectlombok:lombok'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testAnnotationProcessor 'org.projectlombok:lombok'
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-security'
+	implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+	testImplementation 'org.springframework.security:spring-security-test'
+	testImplementation('org.neo4j.test:neo4j-harness:5.26.5') {
+		// Its SLF4J providers clash with Spring Boot's Logback.
+		exclude group: 'org.slf4j', module: 'slf4j-nop'
+		exclude group: 'org.neo4j', module: 'neo4j-slf4j-provider'
+	}
+	implementation 'org.neo4j.driver:neo4j-java-driver'
+	implementation 'eu.michael-simons.neo4j:neo4j-migrations-spring-boot-starter:2.17.1'
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.9'
+// Source: https://mvnrepository.com/artifact/dev.langchain4j/langchain4j
+    implementation("dev.langchain4j:langchain4j:1.16.3")
+    // Source: https://mvnrepository.com/artifact/dev.langchain4j/langchain4j-bedrock
+    implementation("dev.langchain4j:langchain4j-bedrock:1.16.3")
+
+    implementation platform('software.amazon.awssdk:bom:2.32.12')
+    implementation 'software.amazon.awssdk:bedrockruntime'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+  
+  
+  
+    implementation platform("org.apache.camel.springboot:camel-spring-boot-bom:4.10.2")
+
+    implementation "org.apache.camel.springboot:camel-spring-boot-starter"
+    implementation "org.apache.camel:camel-bean"
+    implementation "org.apache.camel:camel-direct"
+    implementation "org.apache.camel:camel-rest"
+
+    
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += "-parameters"
+}
+
+
+
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
+
+
