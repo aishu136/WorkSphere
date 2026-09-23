@@ -8,21 +8,15 @@ import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-import com.example.neo4j.configuration.NotificationConfig;
 import com.example.neo4j.dto.StaffingRequestResponse;
 import com.example.neo4j.entity.Employee;
 import com.example.neo4j.entity.StaffingAction;
+import com.example.neo4j.outbox.OutboxService;
 import com.example.neo4j.repository.AppUserRepository;
 import com.example.neo4j.repository.EmployeeRepository;
 import com.example.neo4j.repository.StaffingQueries;
@@ -38,10 +32,10 @@ import com.example.neo4j.repository.StaffingQueries;
  *   CANCELLED -> HR mailbox        (withdrawn, drop it from the queue)
  * </pre>
  *
- * Runs only after the transaction commits, so nobody is told about a change that rolled back,
- * and on a background thread. Failures are logged and never affect the workflow itself.
+ * Runs just before the business transaction commits and puts the emails in the outbox, so the
+ * change and its emails are saved together or not at all. OutboxDispatcher sends them afterwards
+ * and retries failures. A problem building an email is logged and never blocks the change.
  * Emails are plain text: names and job titles are user-entered, so no HTML is ever built from them.
- * Without a configured mail server (spring.mail.host) emails are only logged.
  */
 @Component
 public class StaffingNotifier {
@@ -55,39 +49,42 @@ public class StaffingNotifier {
     record Email(String to, String subject, String body) {
     }
 
-    private final ObjectProvider<JavaMailSender> mailSender;
+    private final OutboxService outbox;
     private final StaffingQueries staffingQueries;
     private final AppUserRepository userRepository;
     private final EmployeeRepository employeeRepository;
-    private final String from;
     private final String hrEmail;
     private final String baseUrl;
 
-    public StaffingNotifier(ObjectProvider<JavaMailSender> mailSender, StaffingQueries staffingQueries,
+    public StaffingNotifier(OutboxService outbox, StaffingQueries staffingQueries,
                             AppUserRepository userRepository, EmployeeRepository employeeRepository,
-                            @Value("${app.notifications.from:no-reply@worksphere.local}") String from,
                             @Value("${app.notifications.hr-email:}") String hrEmail,
                             @Value("${app.notifications.base-url:}") String baseUrl) {
-        this.mailSender = mailSender;
+        this.outbox = outbox;
         this.staffingQueries = staffingQueries;
         this.userRepository = userRepository;
         this.employeeRepository = employeeRepository;
-        this.from = from;
         this.hrEmail = hrEmail;
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     }
 
-    // After commit, the finished transaction can still be bound to the thread; lookups must run in
-    // a fresh one, or they fail with "Cannot run more queries in this transaction".
-    @Async(NotificationConfig.NOTIFICATION_EXECUTOR)
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    // BEFORE_COMMIT: runs inside the business transaction, so the outbox rows commit (or roll
+    // back) together with the change.
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onStaffingRequestEvent(StaffingRequestEvent event) {
+
+        List<Email> emails;
         try {
-            emailsFor(event).forEach(this::send);
+            emails = emailsFor(event);
         } catch (Exception e) {
-            // Never let a notification problem surface to the user; the change itself is already saved.
-            log.warn("Could not prepare staffing notification for request {}", event.requestId(), e);
+            // A bug in building an email must never block the staffing change itself.
+            log.error("Could not prepare staffing notification for request {}", event.requestId(), e);
+            return;
+        }
+
+        String reference = "staffing-request:" + event.requestId() + ":" + event.type();
+        for (Email email : emails) {
+            outbox.enqueue(email.to(), "[WorkSphere] " + singleLine(email.subject()), email.body(), reference);
         }
     }
 
@@ -183,31 +180,6 @@ public class StaffingNotifier {
                     event.requestId());
         }
         return emails;
-    }
-
-    // ---- Sending ------------------------------------------------------------------
-
-    private void send(Email email) {
-
-        JavaMailSender sender = mailSender.getIfAvailable();
-        if (sender == null) {
-            log.info("Email not sent (no mail server configured) to {}: {}", email.to(), email.subject());
-            return;
-        }
-
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(from);
-        message.setTo(email.to());
-        message.setSubject("[WorkSphere] " + singleLine(email.subject()));
-        message.setText(email.body());
-
-        try {
-            sender.send(message);
-            log.info("Sent staffing notification to {}: {}", email.to(), email.subject());
-        } catch (Exception e) {
-            // One failed recipient doesn't stop the others.
-            log.warn("Could not send staffing notification to {}: {}", email.to(), email.subject(), e);
-        }
     }
 
     // ---- Helpers ------------------------------------------------------------------

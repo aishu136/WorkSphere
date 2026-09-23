@@ -53,7 +53,7 @@ public class SecurityConfig {
                 .requestMatchers("/users/**").hasRole(Role.ADMIN.name())
 
                 // Audit trail: the full log (including logins) is ADMIN only; a record's history is HR/ADMIN.
-                .requestMatchers("/audit/**").hasRole(Role.ADMIN.name())
+                .requestMatchers("/audit/**", "/outbox/**").hasRole(Role.ADMIN.name())
                 .requestMatchers(HttpMethod.GET, "/employees/{id}/history", "/departments/{id}/history",
                         "/offices/{id}/history", "/projects/{id}/history")
                     .hasAnyRole(Role.HR.name(), Role.ADMIN.name())

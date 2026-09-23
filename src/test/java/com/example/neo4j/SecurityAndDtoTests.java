@@ -48,6 +48,8 @@ import com.example.neo4j.controller.EmployeeController;
 import com.example.neo4j.controller.OfficeController;
 import com.example.neo4j.controller.ProjectController;
 import com.example.neo4j.controller.StaffingRequestController;
+import com.example.neo4j.outbox.OutboxController;
+import com.example.neo4j.outbox.OutboxService;
 import com.example.neo4j.controller.UserController;
 import com.example.neo4j.dto.CreateEmployeeRequest;
 import com.example.neo4j.dto.DepartmentSummary;
@@ -71,7 +73,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 @WebMvcTest(controllers = {EmployeeController.class, DepartmentController.class, AuthController.class,
         UserController.class, AuditController.class, OfficeController.class, ProjectController.class,
-        StaffingRequestController.class})
+        StaffingRequestController.class, OutboxController.class})
 @Import({SecurityConfig.class, TokenService.class, TeamAuthorization.class})
 @TestPropertySource(properties = {
         "app.jwt.secret=test-secret-that-is-at-least-32-bytes-long",
@@ -102,6 +104,9 @@ class SecurityAndDtoTests {
 
     @MockitoBean
     StaffingService staffingService;
+
+    @MockitoBean
+    OutboxService outboxService;
 
     // Backs the project-lead check in TeamAuthorization.
     @MockitoBean
@@ -636,6 +641,23 @@ class SecurityAndDtoTests {
                         .content("{\"employeeId\":\"e1\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.action").exists());
+    }
+
+    // ---- Email outbox ------------------------------------------------------------
+
+    @Test
+    void theEmailOutboxIsAdminOnly() throws Exception {
+        when(outboxService.search(any(), any(Pageable.class))).thenReturn(Page.empty());
+
+        mvc.perform(get("/outbox").with(jwt().authorities(role("HR")))).andExpect(status().isForbidden());
+        mvc.perform(post("/outbox/m1/retry").with(jwt().authorities(role("HR")))).andExpect(status().isForbidden());
+
+        mvc.perform(get("/outbox").param("status", "FAILED").with(jwt().authorities(role("ADMIN"))))
+                .andExpect(status().isOk());
+        verify(outboxService).search(eq(com.example.neo4j.outbox.OutboxStatus.FAILED), any(Pageable.class));
+
+        mvc.perform(get("/outbox").param("status", "LOST").with(jwt().authorities(role("ADMIN"))))
+                .andExpect(status().isBadRequest());
     }
 
     // ---- Departments ------------------------------------------------------------

@@ -2,7 +2,7 @@ package com.example.neo4j.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doThrow;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,10 +16,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.mail.MailSendException;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 
 import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.dto.ProjectSummary;
@@ -29,28 +25,29 @@ import com.example.neo4j.entity.Employee;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.entity.StaffingAction;
 import com.example.neo4j.entity.StaffingRequestStatus;
+import com.example.neo4j.outbox.OutboxService;
 import com.example.neo4j.repository.AppUserRepository;
 import com.example.neo4j.repository.EmployeeRepository;
 import com.example.neo4j.repository.StaffingQueries;
 
-/** Recipients and content of staffing emails, with a mocked mail server and no database. */
+/** Recipients and content of the staffing emails put in the outbox. No database or mail server. */
 class StaffingNotifierTests {
+
+    /** One captured outbox entry. */
+    record Queued(String to, String subject, String body, String reference) {
+    }
 
     private StaffingQueries staffingQueries;
     private AppUserRepository users;
     private EmployeeRepository employees;
-    private JavaMailSender sender;
-    private ObjectProvider<JavaMailSender> senderProvider;
+    private OutboxService outbox;
 
     @BeforeEach
-    @SuppressWarnings("unchecked")
     void setUp() {
         staffingQueries = mock(StaffingQueries.class);
         users = mock(AppUserRepository.class);
         employees = mock(EmployeeRepository.class);
-        sender = mock(JavaMailSender.class);
-        senderProvider = mock(ObjectProvider.class);
-        when(senderProvider.getIfAvailable()).thenReturn(sender);
+        outbox = mock(OutboxService.class);
 
         // Lena (login "lena") leads the project; Dev is the person being staffed.
         AppUser lena = new AppUser();
@@ -70,8 +67,8 @@ class StaffingNotifierTests {
     }
 
     private StaffingNotifier notifier(String hrEmail) {
-        return new StaffingNotifier(senderProvider, staffingQueries, users, employees,
-                "no-reply@worksphere.test", hrEmail, "https://worksphere.example.com/");
+        return new StaffingNotifier(outbox, staffingQueries, users, employees, hrEmail,
+                "https://worksphere.example.com/");
     }
 
     private void givenRequest(StaffingAction action, StaffingRequestStatus status, String decidedBy, String reason,
@@ -88,10 +85,17 @@ class StaffingNotifierTests {
         givenRequest(action, status, decidedBy, reason, "Dev Kumar");
     }
 
-    private List<SimpleMailMessage> sent(int expected) {
-        ArgumentCaptor<SimpleMailMessage> captor = ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(sender, times(expected)).send(captor.capture());
-        return captor.getAllValues();
+    private List<Queued> queued(int expected) {
+        ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> reference = ArgumentCaptor.forClass(String.class);
+        verify(outbox, times(expected)).enqueue(to.capture(), subject.capture(), body.capture(), reference.capture());
+
+        return java.util.stream.IntStream.range(0, expected)
+                .mapToObj(i -> new Queued(to.getAllValues().get(i), subject.getAllValues().get(i),
+                        body.getAllValues().get(i), reference.getAllValues().get(i)))
+                .toList();
     }
 
     private static void notify(StaffingNotifier notifier, StaffingRequestEvent.Type type) {
@@ -104,11 +108,11 @@ class StaffingNotifierTests {
 
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.REQUESTED);
 
-        SimpleMailMessage email = sent(1).get(0);
-        assertThat(email.getTo()).containsExactly("hr@example.com");
-        assertThat(email.getFrom()).isEqualTo("no-reply@worksphere.test");
-        assertThat(email.getSubject()).isEqualTo("[WorkSphere] Staffing request: add Dev Kumar on Payroll (PAYROLL)");
-        assertThat(email.getText())
+        Queued email = queued(1).get(0);
+        assertThat(email.to()).isEqualTo("hr@example.com");
+        assertThat(email.subject()).isEqualTo("[WorkSphere] Staffing request: add Dev Kumar on Payroll (PAYROLL)");
+        assertThat(email.reference()).isEqualTo("staffing-request:r1:REQUESTED");
+        assertThat(email.body())
                 .contains("Lena Lead has requested")
                 .contains("Add or update Dev Kumar: Backend dev, 50% allocation")
                 .contains("2026-09-24 10:15 UTC")
@@ -121,14 +125,14 @@ class StaffingNotifierTests {
 
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.APPROVED);
 
-        List<SimpleMailMessage> emails = sent(2);
-        assertThat(emails.get(0).getTo()).containsExactly("lena@example.com");
-        assertThat(emails.get(0).getSubject()).startsWith("[WorkSphere] Approved: add Dev Kumar");
-        assertThat(emails.get(0).getText()).contains("approved by hr.user");
+        List<Queued> emails = queued(2);
+        assertThat(emails.get(0).to()).isEqualTo("lena@example.com");
+        assertThat(emails.get(0).subject()).startsWith("[WorkSphere] Approved: add Dev Kumar");
+        assertThat(emails.get(0).body()).contains("approved by hr.user");
 
-        assertThat(emails.get(1).getTo()).containsExactly("dev@example.com");
-        assertThat(emails.get(1).getSubject()).isEqualTo("[WorkSphere] Project update: Payroll (PAYROLL)");
-        assertThat(emails.get(1).getText())
+        assertThat(emails.get(1).to()).isEqualTo("dev@example.com");
+        assertThat(emails.get(1).subject()).isEqualTo("[WorkSphere] Project update: Payroll (PAYROLL)");
+        assertThat(emails.get(1).body())
                 .contains("You have been staffed on Payroll (PAYROLL)")
                 .contains("Role:       Backend dev")
                 .contains("Allocation: 50% of your time")
@@ -141,9 +145,9 @@ class StaffingNotifierTests {
 
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.APPROVED);
 
-        SimpleMailMessage toEmployee = sent(2).get(1);
-        assertThat(toEmployee.getSubject()).isEqualTo("[WorkSphere] You have been removed from Payroll (PAYROLL)");
-        assertThat(toEmployee.getText()).contains("You are no longer on Payroll (PAYROLL)");
+        Queued toEmployee = queued(2).get(1);
+        assertThat(toEmployee.subject()).isEqualTo("[WorkSphere] You have been removed from Payroll (PAYROLL)");
+        assertThat(toEmployee.body()).contains("You are no longer on Payroll (PAYROLL)");
     }
 
     @Test
@@ -152,10 +156,10 @@ class StaffingNotifierTests {
 
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.REJECTED);
 
-        SimpleMailMessage email = sent(1).get(0);
-        assertThat(email.getTo()).containsExactly("lena@example.com");
-        assertThat(email.getSubject()).startsWith("[WorkSphere] Rejected:");
-        assertThat(email.getText()).contains("rejected by hr.user").contains("Reason:  Dev is fully booked");
+        Queued email = queued(1).get(0);
+        assertThat(email.to()).isEqualTo("lena@example.com");
+        assertThat(email.subject()).startsWith("[WorkSphere] Rejected:");
+        assertThat(email.body()).contains("rejected by hr.user").contains("Reason:  Dev is fully booked");
     }
 
     @Test
@@ -164,9 +168,9 @@ class StaffingNotifierTests {
 
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.CANCELLED);
 
-        SimpleMailMessage email = sent(1).get(0);
-        assertThat(email.getTo()).containsExactly("hr@example.com");
-        assertThat(email.getSubject()).startsWith("[WorkSphere] Staffing request withdrawn:");
+        Queued email = queued(1).get(0);
+        assertThat(email.to()).isEqualTo("hr@example.com");
+        assertThat(email.subject()).startsWith("[WorkSphere] Staffing request withdrawn:");
     }
 
     @Test
@@ -174,35 +178,13 @@ class StaffingNotifierTests {
         // No HR mailbox configured.
         givenRequest(StaffingAction.ASSIGN, StaffingRequestStatus.PENDING, null, null);
         notify(notifier(""), StaffingRequestEvent.Type.REQUESTED);
-        verify(sender, never()).send(any(SimpleMailMessage.class));
+        verify(outbox, never()).enqueue(anyString(), anyString(), anyString(), anyString());
 
         // The employee has no email (e.g. migrated from the old data): only the lead is emailed.
         when(employees.findById("e-dev")).thenReturn(Optional.of(employee("e-dev", "Dev Kumar", null)));
         givenRequest(StaffingAction.ASSIGN, StaffingRequestStatus.APPROVED, "hr.user", null);
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.APPROVED);
-        assertThat(sent(1).get(0).getTo()).containsExactly("lena@example.com");
-    }
-
-    @Test
-    void withoutAMailServerEmailsAreOnlyLogged() {
-        when(senderProvider.getIfAvailable()).thenReturn(null);
-        givenRequest(StaffingAction.ASSIGN, StaffingRequestStatus.PENDING, null, null);
-
-        notify(notifier("hr@example.com"), StaffingRequestEvent.Type.REQUESTED);
-
-        verify(sender, never()).send(any(SimpleMailMessage.class));
-    }
-
-    @Test
-    void oneFailedRecipientDoesNotStopTheOthersOrThrow() {
-        givenRequest(StaffingAction.ASSIGN, StaffingRequestStatus.APPROVED, "hr.user", null);
-        doThrow(new MailSendException("mail server down"))
-                .doNothing()
-                .when(sender).send(any(SimpleMailMessage.class));
-
-        notify(notifier("hr@example.com"), StaffingRequestEvent.Type.APPROVED);
-
-        assertThat(sent(2)).extracting(m -> m.getTo()[0]).containsExactly("lena@example.com", "dev@example.com");
+        assertThat(queued(1).get(0).to()).isEqualTo("lena@example.com");
     }
 
     @Test
@@ -212,16 +194,26 @@ class StaffingNotifierTests {
 
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.REQUESTED);
 
-        assertThat(sent(1).get(0).getSubject()).doesNotContain("\r").doesNotContain("\n")
+        assertThat(queued(1).get(0).subject()).doesNotContain("\r").doesNotContain("\n")
                 .contains("Dev Bcc: attacker@example.com");
     }
 
     @Test
-    void anUnknownRequestSendsNothing() {
+    void aProblemBuildingTheEmailNeverBlocksTheChange() {
+        when(staffingQueries.findById("r1")).thenThrow(new IllegalStateException("unexpected data"));
+
+        // Doesn't throw, so the staffing transaction still commits.
+        notify(notifier("hr@example.com"), StaffingRequestEvent.Type.REQUESTED);
+
+        verify(outbox, never()).enqueue(any(), any(), any(), any());
+    }
+
+    @Test
+    void anUnknownRequestQueuesNothing() {
         when(staffingQueries.findById("r1")).thenReturn(Optional.empty());
 
         notify(notifier("hr@example.com"), StaffingRequestEvent.Type.REQUESTED);
 
-        verify(sender, never()).send(any(SimpleMailMessage.class));
+        verify(outbox, never()).enqueue(any(), any(), any(), any());
     }
 }
