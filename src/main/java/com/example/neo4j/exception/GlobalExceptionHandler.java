@@ -8,6 +8,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -49,6 +50,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
                 .body("A record with the same unique value already exists");
+    }
+
+    // Someone else changed the same record at the same moment (optimistic locking).
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<String> handleConcurrentChange(OptimisticLockingFailureException ex) {
+
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body("This record was changed by someone else at the same time. Reload and try again");
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

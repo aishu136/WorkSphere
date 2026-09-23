@@ -22,6 +22,9 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
   join with a role and an allocation percentage. **Nobody can be allocated more than 100% across
   open projects**, and search can find people with free capacity, e.g.
   `/employees?skill=java&maxAllocation=50`.
+- **Staffing approvals.** A project lead can request to add, change or remove people on their own
+  open project. HR approves or rejects each request, and the change is only applied on approval.
+  See [Staffing approvals](#staffing-approvals).
 - **Roles and manager self-service.** Roles are ADMIN, HR and EMPLOYEE. A login linked to an employee
   can manage that employee's team. The org chart decides who is in the team, so there is no separate
   manager role to keep in sync.
@@ -66,6 +69,30 @@ in the `*Queries` classes. That way, loading one employee never loads the rest o
 - Assignments on completed and cancelled projects are kept as history but don't count toward
   allocation. People can only join open projects.
 - A project with any members, including past ones, can't be deleted. Set it to `CANCELLED` instead.
+
+### Staffing approvals
+
+Project leads don't change their project's members directly. They raise a request, and HR decides it:
+
+```
+lead: POST /projects/{id}/staffing-requests  ->  PENDING
+                                                  |-- HR approves -> APPROVED (change applied)
+                                                  |-- HR rejects  -> REJECTED (reason recorded)
+                                                  |-- lead cancels -> CANCELLED
+```
+
+- Only the project's **current lead** can raise a request. They need a login linked to their employee
+  record, and they can't be terminated.
+- Requests that could never be applied are refused straight away: a finished project, someone who
+  would go over 100%, removing someone who isn't on the project, or a second pending request for the
+  same person.
+- On approval, every rule is **checked again** against the current state. If one now fails, for
+  example because the person was booked elsewhere in the meantime, HR gets a 409 and the request stays
+  pending.
+- **Nobody can approve their own request**, even if they are both the lead and HR.
+- If two HR users decide the same request at the same moment, only the first one succeeds; the
+  second gets a 409.
+- Every step, and the resulting member change, is recorded in the project's history.
 
 ## AI assistant
 
@@ -164,6 +191,7 @@ token into the **Authorize** button.
 | **ADMIN** | Everything, including managing logins and reading the full audit log. |
 | **HR** | Hire, update, terminate and move employees. Manage departments, offices and projects, including who works on them. Read the change history of any employee, department, office or project. |
 | **Manager** (any login linked to an employee who has reports) | For people below them in the org chart: change leave status, edit skills, and move a report to another manager inside their own team. |
+| **Project lead** (a login linked to a project's lead) | Request staffing changes on their own open projects, and view or cancel those requests. HR must approve. |
 | **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Use the AI assistant. |
 
 Managers can't edit their own record, and they can't reach anyone outside their reporting line.
@@ -237,7 +265,19 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | GET | `/projects/{id}/members` | Who is on the project, with role and allocation. |
 | PUT | `/projects/{id}/members/{employeeId}` | Add someone, or change their role or allocation: `{"role":"...","allocationPercent":50}`. |
 | DELETE | `/projects/{id}/members/{employeeId}` | Remove someone from the project. |
-| GET | `/projects/{id}/history` | Change history, including membership changes. HR or ADMIN. |
+| GET | `/projects/{id}/history` | Change history, including membership changes and staffing requests. HR or ADMIN. |
+
+### Staffing requests
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/projects/{id}/staffing-requests` | Project lead: request a change, e.g. `{"employeeId":"...","action":"ASSIGN","role":"...","allocationPercent":50}` or `{"employeeId":"...","action":"REMOVE"}`. |
+| GET | `/projects/{id}/staffing-requests?status=` | The project's requests. Project lead, HR or ADMIN. |
+| POST | `/staffing-requests/{id}/cancel` | Withdraw a pending request. The requester only. |
+| GET | `/staffing-requests?status=PENDING&projectId=` | HR's approval queue, oldest first. HR or ADMIN. |
+| GET | `/staffing-requests/{id}` | One request. HR or ADMIN. |
+| POST | `/staffing-requests/{id}/approve` | Apply the change. HR or ADMIN, but not the requester. |
+| POST | `/staffing-requests/{id}/reject` | `{"reason":"..."}`. HR or ADMIN. |
 
 ### Audit and AI
 
@@ -254,7 +294,7 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | 401 | Not logged in, or the token is invalid or expired. |
 | 403 | Not allowed for your role or team. |
 | 404 | Not found. |
-| 409 | Conflict: a duplicate code or email, a reporting or department loop, an allocation over 100%, or an action blocked by the current state, e.g. terminating someone who still has direct reports. |
+| 409 | Conflict: a duplicate code or email, a reporting or department loop, an allocation over 100%, approving your own staffing request, a record changed by someone else at the same moment, or an action blocked by the current state, e.g. terminating someone who still has direct reports. |
 
 ## Database migrations
 
@@ -267,6 +307,7 @@ Scripts in `src/main/resources/neo4j/migrations` run in order at startup. Each o
 | V0003 | Makes sure each employee is linked to at most one login. |
 | V0004 | Indexes for the audit trail. |
 | V0005 | Constraints and indexes for offices and projects. |
+| V0006 | Constraint and indexes for staffing requests. |
 
 To change the schema, add a new `V0005__description.cypher` file. Never edit a migration that has
 already been applied.
@@ -284,6 +325,8 @@ access to Aura to run them. They cover:
 - **Services:** reporting and department cycles, termination rules, directory filters, uniqueness.
 - **Projects and offices:** the 100% allocation limit, reopening checks, availability search, and
   how termination handles projects and offices.
+- **Staffing approvals:** request and approve, rules re-checked at approval, requests refused up
+  front, no self-approval, requester-only cancel, and a stale second decision being refused.
 - **Manager access:** the team check against a real org chart.
 - **Audit trail:** only changed fields are recorded, and a failed change leaves no audit event.
 - **Migrations:** run against data in the old `Person` format.

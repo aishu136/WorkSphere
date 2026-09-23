@@ -14,12 +14,14 @@ import org.springframework.security.web.access.intercept.RequestAuthorizationCon
 import org.springframework.stereotype.Component;
 
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.ProjectQueries;
 
 /**
- * URL authorization rules for manager self-service. A manager is whoever the org chart says
- * it is: a login linked to an employee who has the target somewhere below them in REPORTS_TO.
- * There is no separate MANAGER role to keep in sync - moving someone in the org chart changes
- * who can edit them immediately.
+ * URL authorization rules that depend on the org chart rather than on a role:
+ * - Managers: a login linked to an employee who has the target somewhere below them in REPORTS_TO.
+ * - Project leads: a login linked to the employee the project is LED_BY.
+ * There are no separate MANAGER or LEAD roles to keep in sync - changing the org chart or a
+ * project's lead changes these rights immediately.
  */
 @Component
 public class TeamAuthorization {
@@ -29,9 +31,17 @@ public class TeamAuthorization {
 
     private final AuthenticationTrustResolver trustResolver = new AuthenticationTrustResolverImpl();
     private final EmployeeQueries employeeQueries;
+    private final ProjectQueries projectQueries;
 
-    public TeamAuthorization(EmployeeQueries employeeQueries) {
+    public TeamAuthorization(EmployeeQueries employeeQueries, ProjectQueries projectQueries) {
         this.employeeQueries = employeeQueries;
+        this.projectQueries = projectQueries;
+    }
+
+    /** HR/ADMIN, or the current lead of the project named by the path variable. */
+    public AuthorizationManager<RequestAuthorizationContext> hrOrProjectLead(String projectVariable) {
+        return (authentication, context) -> decide(authentication, context, username ->
+                projectQueries.isLedBy(username, variable(context, projectVariable)));
     }
 
     /** HR/ADMIN, or a manager of the employee named by the path variable (any depth, not themselves). */

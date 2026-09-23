@@ -4,6 +4,7 @@ import static com.example.neo4j.repository.EmployeeQueries.date;
 import static com.example.neo4j.repository.EmployeeQueries.hasText;
 import static com.example.neo4j.repository.EmployeeQueries.text;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -188,6 +189,23 @@ public class ProjectQueries {
                 .fetchAs(Boolean.class).one().orElse(false);
     }
 
+    /**
+     * Authorization check: is this login the project's lead? False if the login is disabled,
+     * not linked to an employee, or that employee is terminated.
+     */
+    public boolean isLedBy(String username, String projectId) {
+        return client.query("""
+                        MATCH (u:AppUser {username: $username})
+                        WHERE coalesce(u.enabled, true)
+                        RETURN EXISTS {
+                            MATCH (:Project {id: $projectId})-[:LED_BY]->(me:Employee {id: u.employeeId})
+                            WHERE me.status <> 'TERMINATED'
+                        } AS leads
+                        """)
+                .bindAll(Map.of("username", username, "projectId", projectId))
+                .fetchAs(Boolean.class).one().orElse(false);
+    }
+
     public boolean leadsOpenProject(String employeeId) {
         return client.query("""
                         RETURN EXISTS { (p:Project)-[:LED_BY]->(:Employee {id: $id}) WHERE p.status IN %s } AS leads
@@ -198,18 +216,23 @@ public class ProjectQueries {
 
     // ---- Relationship writes ----------------------------------------------
 
-    /** Adds the employee to the project, or updates their role and allocation if already on it. */
+    /**
+     * Adds the employee to the project, or updates their role and allocation if already on it.
+     * The join date comes from the application's clock, like every other date in the app;
+     * Cypher's date() would use the database's time zone instead.
+     */
     public void assign(String employeeId, String projectId, String role, int allocationPercent) {
         Map<String, Object> params = new HashMap<>();
         params.put("id", employeeId);
         params.put("projectId", projectId);
         params.put("role", role);
         params.put("allocation", allocationPercent);
+        params.put("today", LocalDate.now());
 
         client.query("""
                         MATCH (e:Employee {id: $id}), (p:Project {id: $projectId})
                         MERGE (e)-[w:WORKS_ON]->(p)
-                        ON CREATE SET w.since = date()
+                        ON CREATE SET w.since = $today
                         SET w.role = $role, w.allocationPercent = $allocation
                         """)
                 .bindAll(params)

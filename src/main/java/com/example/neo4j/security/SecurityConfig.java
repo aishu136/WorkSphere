@@ -58,6 +58,12 @@ public class SecurityConfig {
                         "/offices/{id}/history", "/projects/{id}/history")
                     .hasAnyRole(Role.HR.name(), Role.ADMIN.name())
 
+                // Staffing approval: the project's lead raises requests, HR decides them.
+                // The requester-only rule for cancelling is checked in StaffingService.
+                .requestMatchers("/projects/{id}/staffing-requests").access(team.hrOrProjectLead("id"))
+                .requestMatchers(HttpMethod.POST, "/staffing-requests/{requestId}/cancel").authenticated()
+                .requestMatchers("/staffing-requests/**").hasAnyRole(Role.HR.name(), Role.ADMIN.name())
+
                 .requestMatchers(HttpMethod.GET, "/employees/**", "/departments/**", "/offices/**", "/projects/**")
                     .authenticated()
 

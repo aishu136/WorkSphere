@@ -47,6 +47,7 @@ import com.example.neo4j.controller.DepartmentController;
 import com.example.neo4j.controller.EmployeeController;
 import com.example.neo4j.controller.OfficeController;
 import com.example.neo4j.controller.ProjectController;
+import com.example.neo4j.controller.StaffingRequestController;
 import com.example.neo4j.controller.UserController;
 import com.example.neo4j.dto.CreateEmployeeRequest;
 import com.example.neo4j.dto.DepartmentSummary;
@@ -56,6 +57,7 @@ import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.entity.EmploymentStatus;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.security.SecurityConfig;
 import com.example.neo4j.security.TeamAuthorization;
 import com.example.neo4j.security.TokenService;
@@ -63,11 +65,13 @@ import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
 import com.example.neo4j.service.OfficeService;
 import com.example.neo4j.service.ProjectService;
+import com.example.neo4j.service.StaffingService;
 import com.example.neo4j.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @WebMvcTest(controllers = {EmployeeController.class, DepartmentController.class, AuthController.class,
-        UserController.class, AuditController.class, OfficeController.class, ProjectController.class})
+        UserController.class, AuditController.class, OfficeController.class, ProjectController.class,
+        StaffingRequestController.class})
 @Import({SecurityConfig.class, TokenService.class, TeamAuthorization.class})
 @TestPropertySource(properties = {
         "app.jwt.secret=test-secret-that-is-at-least-32-bytes-long",
@@ -95,6 +99,13 @@ class SecurityAndDtoTests {
 
     @MockitoBean
     ProjectService projectService;
+
+    @MockitoBean
+    StaffingService staffingService;
+
+    // Backs the project-lead check in TeamAuthorization.
+    @MockitoBean
+    ProjectQueries projectQueries;
 
     @MockitoBean
     UserService userService;
@@ -541,6 +552,90 @@ class SecurityAndDtoTests {
         mvc.perform(get("/projects/p1/history").with(manager())).andExpect(status().isForbidden());
 
         verify(auditLog).search(AuditFilter.forTarget(AuditTargetType.PROJECT, "p1"), PageRequest.of(0, 20));
+    }
+
+    // ---- Staffing requests ------------------------------------------------------
+
+    private static com.example.neo4j.dto.StaffingRequestResponse staffingRequest(String id) {
+        return new com.example.neo4j.dto.StaffingRequestResponse(id, null, null,
+                com.example.neo4j.entity.StaffingAction.ASSIGN, "Dev", 50,
+                com.example.neo4j.entity.StaffingRequestStatus.PENDING, "mgr", null, null, null, null);
+    }
+
+    private static final String ASSIGN_BODY =
+            "{\"employeeId\":\"e1\",\"action\":\"ASSIGN\",\"role\":\"Dev\",\"allocationPercent\":50}";
+
+    @Test
+    void projectLeadCanRaiseRequestsOnlyForTheirOwnProject() throws Exception {
+        when(projectQueries.isLedBy("mgr", "p1")).thenReturn(true);
+        when(staffingService.request(eq("p1"), any(), eq("mgr"))).thenReturn(staffingRequest("r1"));
+        when(staffingService.search(eq("p1"), any(), any(Pageable.class))).thenReturn(Page.empty());
+
+        mvc.perform(post("/projects/p1/staffing-requests").with(manager())
+                        .contentType(MediaType.APPLICATION_JSON).content(ASSIGN_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("PENDING"));
+        mvc.perform(get("/projects/p1/staffing-requests").with(manager())).andExpect(status().isOk());
+
+        // Not their project.
+        mvc.perform(post("/projects/p2/staffing-requests").with(manager())
+                        .contentType(MediaType.APPLICATION_JSON).content(ASSIGN_BODY))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/projects/p2/staffing-requests").with(manager())).andExpect(status().isForbidden());
+
+        // Leading a project doesn't allow changing its members directly.
+        mvc.perform(put("/projects/p1/members/e1").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"allocationPercent\":50}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void onlyHrWorksTheApprovalQueue() throws Exception {
+        when(projectQueries.isLedBy(eq("mgr"), any())).thenReturn(true);
+        when(staffingService.search(any(), any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(staffingService.approve("r1", "hr.user")).thenReturn(staffingRequest("r1"));
+
+        mvc.perform(get("/staffing-requests").with(manager())).andExpect(status().isForbidden());
+        mvc.perform(post("/staffing-requests/r1/approve").with(manager())).andExpect(status().isForbidden());
+        mvc.perform(post("/staffing-requests/r1/reject").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"no\"}"))
+                .andExpect(status().isForbidden());
+
+        var hr = jwt().jwt(token -> token.subject("hr.user")).authorities(role("HR"));
+        mvc.perform(get("/staffing-requests").param("status", "PENDING").with(hr)).andExpect(status().isOk());
+        mvc.perform(post("/staffing-requests/r1/approve").with(hr)).andExpect(status().isOk());
+        verify(staffingService).approve("r1", "hr.user");
+
+        mvc.perform(post("/staffing-requests/r1/reject").with(hr).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\" \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.reason").exists());
+    }
+
+    @Test
+    void cancelIsCheckedAgainstTheRequester() throws Exception {
+        when(staffingService.cancel("r1", "mgr")).thenReturn(staffingRequest("r1"));
+        when(staffingService.cancel("r1", "someone.else"))
+                .thenThrow(new org.springframework.security.access.AccessDeniedException("not yours"));
+
+        mvc.perform(post("/staffing-requests/r1/cancel").with(manager())).andExpect(status().isOk());
+        mvc.perform(post("/staffing-requests/r1/cancel")
+                        .with(jwt().jwt(token -> token.subject("someone.else")).authorities(role("EMPLOYEE"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void invalidStaffingRequestsAreRejected() throws Exception {
+        when(projectQueries.isLedBy("mgr", "p1")).thenReturn(true);
+
+        mvc.perform(post("/projects/p1/staffing-requests").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"employeeId\":\"e1\",\"action\":\"ASSIGN\",\"allocationPercent\":150}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.allocationPercent").exists());
+        mvc.perform(post("/projects/p1/staffing-requests").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"employeeId\":\"e1\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.action").exists());
     }
 
     // ---- Departments ------------------------------------------------------------
