@@ -8,7 +8,7 @@ import lombok.Data;
 @Data
 public class AIRequest {
 
-    @NotBlank
+    // Optional hint: the assistant can also find people by itself.
     @Size(max = 100)
     private String employeeName;
 

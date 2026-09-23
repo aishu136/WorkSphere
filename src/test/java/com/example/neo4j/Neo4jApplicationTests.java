@@ -6,6 +6,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.neo4j.harness.Neo4j;
@@ -15,9 +17,18 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.example.neo4j.support.EmbeddedNeo4j;
+
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -49,6 +60,10 @@ class Neo4jApplicationTests {
 
 	@Autowired
 	ObjectMapper json;
+
+	// Stands in for Bedrock so the LangGraph4j assistant can be driven end to end.
+	@MockitoBean
+	ChatModel chatModel;
 
 	private JsonNode call(org.springframework.test.web.servlet.RequestBuilder request, int expectedStatus)
 			throws Exception {
@@ -157,6 +172,43 @@ class Neo4jApplicationTests {
 				.andExpect(jsonPath("$.totalElements").value(1))
 				.andExpect(jsonPath("$.content[0].actor").value("chitra"))
 				.andExpect(jsonPath("$.content[0].details.reason").value("BAD_CREDENTIALS"));
+
+		// ---- AI assistant: /ai -> Camel -> LangGraph4j graph -> tools -> Neo4j ----
+
+		String devId = dev;
+		org.mockito.Mockito.when(chatModel.chat(org.mockito.ArgumentMatchers.any(ChatRequest.class)))
+				.thenAnswer(invocation -> {
+					ChatRequest request = invocation.getArgument(0);
+					List<ChatMessage> messages = request.messages();
+					long toolResults = messages.stream().filter(ToolExecutionResultMessage.class::isInstance).count();
+					AiMessage reply;
+					if (toolResults == 0) {
+						reply = AiMessage.from(ToolExecutionRequest.builder().id("t1").name("searchEmployees")
+								.arguments("{\"name\":\"dev\"}").build());
+					} else if (toolResults == 1) {
+						reply = AiMessage.from(ToolExecutionRequest.builder().id("t2").name("getEmployee")
+								.arguments("{\"employeeId\":\"" + devId + "\"}").build());
+					} else {
+						// Echo what the tools returned, to prove real data reached the model.
+						reply = AiMessage.from(messages.stream()
+								.filter(ToolExecutionResultMessage.class::isInstance)
+								.map(m -> ((ToolExecutionResultMessage) m).text())
+								.collect(java.util.stream.Collectors.joining(System.lineSeparator())));
+					}
+					return ChatResponse.builder().aiMessage(reply).build();
+				});
+
+		String answer = mvc.perform(post("/ai").header("Authorization", managerAuth)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"question\":\"Who is Dev's manager and when did they join?\"}"))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString();
+
+		org.assertj.core.api.Assertions.assertThat(answer)
+				.contains("Dev Kumar")
+				.contains("Chitra CTO")
+				.contains("2024-06-01")
+				.contains("ON_LEAVE");
 
 		// The manager can't read the audit log or history.
 		mvc.perform(get("/audit").header("Authorization", managerAuth)).andExpect(status().isForbidden());

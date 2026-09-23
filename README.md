@@ -5,7 +5,7 @@ is (people, reporting lines, departments inside departments, skills) and uses th
 permissions and an AI assistant.
 
 **Stack:** Java 21 · Spring Boot 3.5 · Spring Data Neo4j · Neo4j 5 / Aura · Spring Security (JWT) ·
-neo4j-migrations · Apache Camel · LangChain4j + Amazon Bedrock
+neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
 
 ## Features
 
@@ -22,8 +22,10 @@ neo4j-migrations · Apache Camel · LangChain4j + Amazon Bedrock
 - **Audit trail.** Every change and every login attempt is recorded. Updates store only the fields
   that changed, with their before and after values. Each event is written in the same transaction as
   its change, and events can't be edited or deleted.
-- **AI assistant.** Ask questions about employees in plain English. Answers come only from the
-  employee data.
+- **AI assistant (LangGraph4j agent).** Ask questions about the organisation in plain English, for
+  example "Who in Engineering knows Kafka?" or "Who does Priya's manager report to?". The assistant
+  looks the answer up in the org chart before replying, and never changes data. See
+  [AI assistant](#ai-assistant).
 - **Versioned database migrations.** Constraints, indexes and data conversions run automatically at
   startup.
 
@@ -44,6 +46,36 @@ The `Employee` and `Department` entities map only their links to skills and comp
 links (manager, membership, parent, head) are read and written with targeted Cypher in
 `EmployeeQueries` and `DepartmentQueries`. That way, loading one employee never loads the rest of the
 organisation.
+
+## AI assistant
+
+`POST /ai` runs a [LangGraph4j](https://github.com/langgraph4j/langgraph4j) state graph (see
+`aiservice/agent/OrgAssistantAgent`):
+
+```
+START -> [agent] --tool calls--> [tools] --+
+            ^                              |
+            +------------------------------+
+         [agent] --final answer or step limit--> END
+```
+
+- **agent** sends the conversation and the list of available tools to the model (Amazon Bedrock).
+- **tools** runs the lookups the model asked for and adds the results to the conversation.
+- The graph loops until the model gives a final answer. It stops after **5 tool rounds**, so a
+  confused model can't run forever or run up costs.
+
+The tools are in `aiservice/agent/OrgTools`. They are **read-only** and cover only what every
+logged-in user can already read through the API:
+
+- searching employees
+- employee details
+- reporting chain, direct reports and whole team
+- finding departments and their members
+
+The assistant can't change data or read audit history, so it can't be used to get around
+permissions. If a tool fails, for example with an unknown id, the error goes back to the model as a
+message, so it can correct itself instead of failing the request. The system prompt tells the model
+to treat tool results as data and to ignore any instructions inside them.
 
 ## Getting started
 
@@ -165,7 +197,7 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/audit?actor=&action=&targetType=&targetId=&from=&to=` | Full audit log, newest first. ADMIN only. `from` and `to` are ISO-8601, e.g. `2026-01-01T00:00:00Z`. |
-| POST | `/ai` | `{"employeeName":"...","question":"..."}`. Answers using only the employee data. |
+| POST | `/ai` | `{"question":"..."}`, with an optional `"employeeName"` hint. The assistant looks the answer up with read-only tools. |
 
 ### Error responses
 
@@ -205,7 +237,10 @@ access to Aura to run them. They cover:
 - **Manager access:** the team check against a real org chart.
 - **Audit trail:** only changed fields are recorded, and a failed change leaves no audit event.
 - **Migrations:** run against data in the old `Person` format.
-- **End to end:** the whole application started and driven over HTTP.
+- **AI assistant:** the LangGraph4j loop driven by a scripted model. Covers tool results reaching
+  the model, errors handed back as messages, and the step limit.
+- **End to end:** the whole application started and driven over HTTP, including an `/ai` question
+  answered from real Neo4j data. The model is replaced with a stand-in, so Bedrock isn't needed.
 
 ## Project structure
 
@@ -218,7 +253,7 @@ src/main/java/com/example/neo4j/
 ├── dto/            Request and response types
 ├── security/       JWT, role rules and the manager team check (SecurityConfig, TeamAuthorization)
 ├── audit/          Audit trail: AuditLog and the /audit endpoints
-├── aiservice/      Builds the AI prompt from the graph
+├── aiservice/      AI assistant: agent/ holds the LangGraph4j graph and its read-only tools
 ├── route/          Camel route for the AI request
 └── exception/      Maps errors to HTTP status codes
 ```
