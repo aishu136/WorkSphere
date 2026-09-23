@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
@@ -24,6 +25,7 @@ import com.example.neo4j.entity.StaffingRequest;
 import com.example.neo4j.entity.StaffingRequestStatus;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.exception.ResourceNotFoundException;
+import com.example.neo4j.notification.StaffingRequestEvent;
 import com.example.neo4j.repository.EmployeeRepository;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.repository.ProjectRepository;
@@ -38,7 +40,8 @@ import com.example.neo4j.repository.StaffingRequestRepository;
  * - Approval applies the change through ProjectService, so every rule (open project, active
  *   employee, 100% allocation cap) is checked again against the current state.
  * - Nobody can approve their own request.
- * - Every step is recorded in the project's audit history.
+ * - Every step is recorded in the project's audit history and published as a
+ *   StaffingRequestEvent, which triggers email notifications once the transaction commits.
  *
  * Who may call what (lead vs HR) is enforced in SecurityConfig; this class enforces the rules
  * that depend on the request itself, such as "only the requester can cancel".
@@ -53,10 +56,11 @@ public class StaffingService {
 	private final EmployeeRepository employeeRepository;
 	private final ProjectService projectService;
 	private final AuditLog auditLog;
+	private final ApplicationEventPublisher events;
 
 	public StaffingService(StaffingRequestRepository requestRepository, StaffingQueries staffingQueries,
 			ProjectRepository projectRepository, ProjectQueries projectQueries, EmployeeRepository employeeRepository,
-			ProjectService projectService, AuditLog auditLog) {
+			ProjectService projectService, AuditLog auditLog, ApplicationEventPublisher events) {
 		this.requestRepository = requestRepository;
 		this.staffingQueries = staffingQueries;
 		this.projectRepository = projectRepository;
@@ -64,6 +68,7 @@ public class StaffingService {
 		this.employeeRepository = employeeRepository;
 		this.projectService = projectService;
 		this.auditLog = auditLog;
+		this.events = events;
 	}
 
 	@Transactional(readOnly = true)
@@ -129,6 +134,7 @@ public class StaffingService {
 
 		StaffingRequest saved = requestRepository.save(staffingRequest);
 		audit(AuditAction.STAFFING_REQUESTED, saved, null);
+		publish(saved, StaffingRequestEvent.Type.REQUESTED);
 
 		return findById(saved.getId());
 	}
@@ -144,6 +150,7 @@ public class StaffingService {
 
 		decide(request, StaffingRequestStatus.CANCELLED, username, null);
 		audit(AuditAction.STAFFING_REQUEST_CANCELLED, request, null);
+		publish(request, StaffingRequestEvent.Type.CANCELLED);
 
 		return findById(requestId);
 	}
@@ -168,6 +175,7 @@ public class StaffingService {
 
 		decide(request, StaffingRequestStatus.APPROVED, username, null);
 		audit(AuditAction.STAFFING_REQUEST_APPROVED, request, null);
+		publish(request, StaffingRequestEvent.Type.APPROVED);
 
 		return findById(requestId);
 	}
@@ -179,6 +187,7 @@ public class StaffingService {
 
 		decide(request, StaffingRequestStatus.REJECTED, username, reason.trim());
 		audit(AuditAction.STAFFING_REQUEST_REJECTED, request, reason.trim());
+		publish(request, StaffingRequestEvent.Type.REJECTED);
 
 		return findById(requestId);
 	}
@@ -201,6 +210,11 @@ public class StaffingService {
 		request.setDecidedAt(Instant.now());
 		request.setReason(reason);
 		requestRepository.save(request);
+	}
+
+	// Listeners run only if the transaction commits (see StaffingNotifier).
+	private void publish(StaffingRequest request, StaffingRequestEvent.Type type) {
+		events.publishEvent(new StaffingRequestEvent(request.getId(), type));
 	}
 
 	// Recorded on the project, so the project's history shows the whole workflow.

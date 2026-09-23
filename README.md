@@ -24,7 +24,8 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
   `/employees?skill=java&maxAllocation=50`.
 - **Staffing approvals.** A project lead can request to add, change or remove people on their own
   open project. HR approves or rejects each request, and the change is only applied on approval.
-  See [Staffing approvals](#staffing-approvals).
+  HR, the lead and the affected employee are notified by email. See
+  [Staffing approvals](#staffing-approvals).
 - **Roles and manager self-service.** Roles are ADMIN, HR and EMPLOYEE. A login linked to an employee
   can manage that employee's team. The org chart decides who is in the team, so there is no separate
   manager role to keep in sync.
@@ -94,6 +95,24 @@ lead: POST /projects/{id}/staffing-requests  ->  PENDING
   second gets a 409.
 - Every step, and the resulting member change, is recorded in the project's history.
 
+#### Email notifications
+
+| When | Who is emailed |
+|---|---|
+| A request is raised | The HR mailbox (`NOTIFY_HR_EMAIL`) |
+| A request is approved | The lead who asked, and the employee who was added or removed |
+| A request is rejected | The lead who asked, with HR's reason |
+| A request is withdrawn | The HR mailbox |
+
+- Leads and employees are emailed at the address on their employee record. People without an
+  email address are skipped, and the skip is logged.
+- Emails are sent **only after the change is saved**, on a background thread. Nobody is emailed about
+  a change that was rolled back, and a mail server problem never fails or undoes the change itself.
+  Failures are logged.
+- Emails are plain text. Line breaks are removed from subject lines, because names come from user
+  input.
+- Without a mail server configured, emails are written to the log instead of being sent.
+
 ## AI assistant
 
 `POST /ai` runs a [LangGraph4j](https://github.com/langgraph4j/langgraph4j) state graph (see
@@ -146,6 +165,10 @@ All secrets come from environment variables. None are stored in the repository.
 | `NEO4J_DATABASE` | yes | Database name |
 | `JWT_SECRET` | yes | Key used to sign login tokens. At least 32 characters. The app won't start with a shorter one. |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | first start | Creates the first ADMIN account when the database has no users yet. Can be removed afterwards. |
+| `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` | for email | SMTP server for notifications. For STARTTLS also set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true`. Without these, emails are only logged. |
+| `NOTIFY_HR_EMAIL` | for email | Shared HR mailbox that receives new and withdrawn staffing requests. |
+| `NOTIFY_FROM` | no | Sender address. Defaults to `no-reply@worksphere.local`. |
+| `APP_BASE_URL` | no | Frontend address used for links in emails, e.g. `https://worksphere.example.com`. |
 | AWS credentials | for `/ai` | Picked up in the standard AWS way, e.g. `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or `~/.aws/credentials`. The region is `us-east-1`. |
 
 Other settings are in `src/main/resources/application.properties`:
@@ -327,6 +350,9 @@ access to Aura to run them. They cover:
   how termination handles projects and offices.
 - **Staffing approvals:** request and approve, rules re-checked at approval, requests refused up
   front, no self-approval, requester-only cancel, and a stale second decision being refused.
+- **Email notifications:** recipients and content for each step, missing addresses, no mail server,
+  and failed sends. Also, against a real database: emails only after commit, none after a rollback,
+  and a mail outage not affecting the workflow.
 - **Manager access:** the team check against a real org chart.
 - **Audit trail:** only changed fields are recorded, and a failed change leaves no audit event.
 - **Migrations:** run against data in the old `Person` format.
@@ -357,6 +383,9 @@ src/main/java/com/example/neo4j/
   working for read-only endpoints until it expires (60 minutes by default). Their manager rights stop
   immediately.
 - **Companies.** There's no API to create companies yet. Assigning an existing company works.
+- **Email delivery isn't guaranteed.** Notifications are sent once, after the change is saved. If the
+  mail server is down at that moment, the email is lost; this is logged. Guaranteed delivery would
+  need an outbox, meaning emails stored in the database and retried until they are sent.
 - **Audit tamper protection.** The application can't change audit events, but anyone with direct
   database access could. For strict compliance, also stream audit events to a write-once store.
 - **Checks under concurrency.** The reporting-loop check and the 100% allocation check aren't
