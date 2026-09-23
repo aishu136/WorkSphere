@@ -23,8 +23,10 @@ import com.example.neo4j.dto.DepartmentSummary;
 import com.example.neo4j.dto.EmployeeFilter;
 import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeSummary;
+import com.example.neo4j.dto.OfficeSummary;
 import com.example.neo4j.dto.SkillResponse;
 import com.example.neo4j.entity.EmploymentStatus;
+import com.example.neo4j.entity.ProjectStatus;
 
 /**
  * Hand-written Cypher for employee reads and for the org-chart relationships
@@ -35,16 +37,22 @@ import com.example.neo4j.entity.EmploymentStatus;
 @Repository
 public class EmployeeQueries {
 
+    // Total allocation of employee e across open projects (finished projects don't count).
+    static final String OPEN_ALLOCATION = "reduce(total = 0, a IN [(e)-[w:WORKS_ON]->(p:Project) "
+            + "WHERE p.status IN " + ProjectStatus.OPEN_CYPHER_LIST + " | w.allocationPercent] | total + a)";
+
     // Pattern comprehensions fetch related nodes without multiplying rows.
     private static final String EMPLOYEE_PROJECTION = """
             RETURN e {.id, .employeeCode, .name, .email, .jobTitle, .hireDate, .status, .terminationDate} AS employee,
                    head([(e)-[:MEMBER_OF]->(d:Department) | d {.id, .code, .name}]) AS department,
                    head([(e)-[:REPORTS_TO]->(m:Employee) | m {.id, .name, .jobTitle}]) AS manager,
                    head([(e)-[:WORKS_FOR]->(c:Company) | c {.id, .name}]) AS company,
+                   head([(e)-[:LOCATED_AT]->(o:Office) | o {.id, .code, .name, .city}]) AS office,
                    [(e)-[:HAS_SKILL]->(s:Skill) | s {.id, .name}] AS skills,
-                   COUNT { (:Employee)-[:REPORTS_TO]->(e) } AS directReportCount
+                   COUNT { (:Employee)-[:REPORTS_TO]->(e) } AS directReportCount,
+                   %s AS allocationPercent
             ORDER BY employee.name, employee.id
-            """;
+            """.formatted(OPEN_ALLOCATION);
 
     private static final String SUMMARY_PROJECTION = """
             RETURN e {.id, .name, .jobTitle} AS employee
@@ -93,6 +101,14 @@ public class EmployeeQueries {
         if (hasText(filter.company())) {
             conditions.add("EXISTS { (e)-[:WORKS_FOR]->(c:Company) WHERE toLower(c.name) = $company }");
             params.put("company", filter.company().trim().toLowerCase(Locale.ROOT));
+        }
+        if (hasText(filter.officeId())) {
+            conditions.add("EXISTS { (e)-[:LOCATED_AT]->(:Office {id: $officeId}) }");
+            params.put("officeId", filter.officeId());
+        }
+        if (filter.maxAllocation() != null) {
+            conditions.add(OPEN_ALLOCATION + " <= $maxAllocation");
+            params.put("maxAllocation", filter.maxAllocation());
         }
 
         String match = "MATCH (e:Employee)"
@@ -224,6 +240,24 @@ public class EmployeeQueries {
                 .run();
     }
 
+    public void setOffice(String employeeId, String officeId) {
+        client.query("""
+                        MATCH (e:Employee {id: $id}), (o:Office {id: $officeId})
+                        OPTIONAL MATCH (e)-[old:LOCATED_AT]->()
+                        DELETE old
+                        WITH DISTINCT e, o
+                        CREATE (e)-[:LOCATED_AT]->(o)
+                        """)
+                .bindAll(Map.of("id", employeeId, "officeId", officeId))
+                .run();
+    }
+
+    public void clearOffice(String employeeId) {
+        client.query("MATCH (:Employee {id: $id})-[r:LOCATED_AT]->() DELETE r")
+                .bind(employeeId).to("id")
+                .run();
+    }
+
     // ---- Helpers ----------------------------------------------------------
 
     private <T> Page<T> page(String match, Map<String, Object> params, Pageable pageable, String projection,
@@ -253,6 +287,7 @@ public class EmployeeQueries {
         Value department = record.get("department");
         Value manager = record.get("manager");
         Value company = record.get("company");
+        Value office = record.get("office");
 
         List<SkillResponse> skills = record.get("skills").asList(s -> new SkillResponse(
                         text(s.get("id")), text(s.get("name"))))
@@ -278,8 +313,12 @@ public class EmployeeQueries {
                         : new EmployeeSummary(text(manager.get("id")), text(manager.get("name")),
                                 text(manager.get("jobTitle"))),
                 company.isNull() ? null : new CompanyResponse(text(company.get("id")), text(company.get("name"))),
+                office.isNull() ? null
+                        : new OfficeSummary(text(office.get("id")), text(office.get("code")),
+                                text(office.get("name")), text(office.get("city"))),
                 skills,
-                record.get("directReportCount").asLong());
+                record.get("directReportCount").asLong(),
+                record.get("allocationPercent").asInt());
     }
 
     static EmployeeSummary toSummary(Record record) {
@@ -291,11 +330,11 @@ public class EmployeeQueries {
         return value == null || value.isNull() ? null : value.asString();
     }
 
-    private static LocalDate date(Value value) {
+    static LocalDate date(Value value) {
         return value == null || value.isNull() ? null : value.asLocalDate();
     }
 
-    private static boolean hasText(String value) {
+    static boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
 }

@@ -45,6 +45,8 @@ import com.example.neo4j.audit.AuditTargetType;
 import com.example.neo4j.controller.AuthController;
 import com.example.neo4j.controller.DepartmentController;
 import com.example.neo4j.controller.EmployeeController;
+import com.example.neo4j.controller.OfficeController;
+import com.example.neo4j.controller.ProjectController;
 import com.example.neo4j.controller.UserController;
 import com.example.neo4j.dto.CreateEmployeeRequest;
 import com.example.neo4j.dto.DepartmentSummary;
@@ -59,11 +61,13 @@ import com.example.neo4j.security.TeamAuthorization;
 import com.example.neo4j.security.TokenService;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
+import com.example.neo4j.service.OfficeService;
+import com.example.neo4j.service.ProjectService;
 import com.example.neo4j.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @WebMvcTest(controllers = {EmployeeController.class, DepartmentController.class, AuthController.class,
-        UserController.class, AuditController.class})
+        UserController.class, AuditController.class, OfficeController.class, ProjectController.class})
 @Import({SecurityConfig.class, TokenService.class, TeamAuthorization.class})
 @TestPropertySource(properties = {
         "app.jwt.secret=test-secret-that-is-at-least-32-bytes-long",
@@ -85,6 +89,12 @@ class SecurityAndDtoTests {
 
     @MockitoBean
     DepartmentService departmentService;
+
+    @MockitoBean
+    OfficeService officeService;
+
+    @MockitoBean
+    ProjectService projectService;
 
     @MockitoBean
     UserService userService;
@@ -116,7 +126,7 @@ class SecurityAndDtoTests {
         return new EmployeeResponse(id, "E-" + id, name, id + "@example.com", "Engineer",
                 LocalDate.of(2024, 1, 15), EmploymentStatus.ACTIVE, null,
                 new DepartmentSummary("d1", "ENG", "Engineering"),
-                new EmployeeSummary("m1", "Manager", "Director"), null, List.of(), 0);
+                new EmployeeSummary("m1", "Manager", "Director"), null, null, List.of(), 0, 0);
     }
 
     // ---- Authentication and roles -----------------------------------------------
@@ -226,13 +236,14 @@ class SecurityAndDtoTests {
 
     @Test
     void directoryFiltersAndPagingAreBound() throws Exception {
-        EmployeeFilter expected = new EmployeeFilter("pri", EmploymentStatus.ACTIVE, "d1", "java", "acme");
+        EmployeeFilter expected = new EmployeeFilter("pri", EmploymentStatus.ACTIVE, "d1", "java", "acme", "o1", 50);
         when(employeeService.search(expected, PageRequest.of(1, 2)))
                 .thenReturn(new PageImpl<>(List.of(employee("a", "Priya")), PageRequest.of(1, 2), 3));
 
         mvc.perform(get("/employees")
                         .param("name", "pri").param("status", "ACTIVE").param("departmentId", "d1")
                         .param("skill", "java").param("company", "acme")
+                        .param("officeId", "o1").param("maxAllocation", "50")
                         .param("page", "1").param("size", "2")
                         .with(jwt().authorities(role("EMPLOYEE"))))
                 .andExpect(status().isOk())
@@ -476,6 +487,60 @@ class SecurityAndDtoTests {
                 .andExpect(content().string("Invalid username or password"));
         verify(auditLog).recordAs("gone.user", AuditAction.LOGIN_FAILED, AuditTargetType.USER, "gone.user",
                 java.util.Map.of("reason", "ACCOUNT_DISABLED"));
+    }
+
+    // ---- Offices and projects ---------------------------------------------------
+
+    @Test
+    void officesAndProjectsAreReadableByAllButChangedOnlyByHr() throws Exception {
+        when(officeService.search(any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(projectService.search(any(), any(), any(), any(Pageable.class))).thenReturn(Page.empty());
+
+        mvc.perform(get("/offices").with(manager())).andExpect(status().isOk());
+        mvc.perform(get("/projects").with(manager())).andExpect(status().isOk());
+
+        // Even a manager with a team can't change offices or staff projects.
+        when(employeeQueries.isInTeamOf(eq("mgr"), any(), anyBoolean())).thenReturn(true);
+        mvc.perform(post("/offices").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"BLR-01\",\"name\":\"Bengaluru\",\"city\":\"Bengaluru\",\"country\":\"India\"}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/projects/p1/members/e1").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"allocationPercent\":50}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/employees/e1/office/o1").with(manager())).andExpect(status().isForbidden());
+
+        when(officeService.create(any())).thenReturn(new com.example.neo4j.dto.OfficeResponse(
+                "o1", "BLR-01", "Bengaluru", "Bengaluru", "India", null, null, 0));
+        mvc.perform(post("/offices").with(jwt().authorities(role("HR"))).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"BLR-01\",\"name\":\"Bengaluru\",\"city\":\"Bengaluru\",\"country\":\"India\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value("BLR-01"));
+    }
+
+    @Test
+    void allocationMustBeBetween1And100() throws Exception {
+        for (String body : List.of("{\"allocationPercent\":0}", "{\"allocationPercent\":101}", "{}")) {
+            mvc.perform(put("/projects/p1/members/e1").with(jwt().authorities(role("HR")))
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.allocationPercent").exists());
+        }
+
+        mvc.perform(get("/employees").param("maxAllocation", "101").with(manager()))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/projects").param("status", "FINISHED").with(manager()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void officeAndProjectHistoryIsHrOrAdmin() throws Exception {
+        when(auditLog.search(any(AuditFilter.class), any(Pageable.class))).thenReturn(Page.empty());
+
+        mvc.perform(get("/projects/p1/history").with(jwt().authorities(role("HR")))).andExpect(status().isOk());
+        mvc.perform(get("/offices/o1/history").with(jwt().authorities(role("ADMIN")))).andExpect(status().isOk());
+        mvc.perform(get("/projects/p1/history").with(manager())).andExpect(status().isForbidden());
+
+        verify(auditLog).search(AuditFilter.forTarget(AuditTargetType.PROJECT, "p1"), PageRequest.of(0, 20));
     }
 
     // ---- Departments ------------------------------------------------------------

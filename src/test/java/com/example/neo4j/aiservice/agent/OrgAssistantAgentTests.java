@@ -23,6 +23,8 @@ import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
+import com.example.neo4j.service.OfficeService;
+import com.example.neo4j.service.ProjectService;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -85,17 +87,21 @@ class OrgAssistantAgentTests {
 
     private EmployeeService employees;
     private DepartmentService departments;
+    private OfficeService offices;
+    private ProjectService projects;
     private ScriptedChatModel model;
 
     @BeforeEach
     void setUp() {
         employees = mock(EmployeeService.class);
         departments = mock(DepartmentService.class);
+        offices = mock(OfficeService.class);
+        projects = mock(ProjectService.class);
         model = new ScriptedChatModel();
     }
 
     private OrgAssistantAgent agent() throws Exception {
-        return new OrgAssistantAgent(model, new OrgTools(employees, departments));
+        return new OrgAssistantAgent(model, new OrgTools(employees, departments, offices, projects));
     }
 
     @Test
@@ -109,7 +115,8 @@ class OrgAssistantAgentTests {
         assertThat(((UserMessage) first.messages().get(1)).singleText()).isEqualTo("Hi");
         assertThat(first.toolSpecifications()).extracting(ToolSpecification::name)
                 .containsExactlyInAnyOrder("searchEmployees", "getEmployee", "getReportingChain",
-                        "getDirectReports", "getAllReports", "findDepartments", "getDepartmentMembers");
+                        "getDirectReports", "getAllReports", "findDepartments", "getDepartmentMembers",
+                        "findOffices", "findProjects", "getProjectMembers", "getEmployeeProjects");
     }
 
     @Test

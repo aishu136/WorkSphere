@@ -54,10 +54,12 @@ public class SecurityConfig {
 
                 // Audit trail: the full log (including logins) is ADMIN only; a record's history is HR/ADMIN.
                 .requestMatchers("/audit/**").hasRole(Role.ADMIN.name())
-                .requestMatchers(HttpMethod.GET, "/employees/{id}/history", "/departments/{id}/history")
+                .requestMatchers(HttpMethod.GET, "/employees/{id}/history", "/departments/{id}/history",
+                        "/offices/{id}/history", "/projects/{id}/history")
                     .hasAnyRole(Role.HR.name(), Role.ADMIN.name())
 
-                .requestMatchers(HttpMethod.GET, "/employees/**", "/departments/**").authenticated()
+                .requestMatchers(HttpMethod.GET, "/employees/**", "/departments/**", "/offices/**", "/projects/**")
+                    .authenticated()
 
                 // Manager self-service: the only writes a manager may make, and only for their own team.
                 .requestMatchers(HttpMethod.PUT, "/employees/{id}/status").access(team.hrOrManagerOf("id"))
@@ -67,8 +69,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/employees/{id}/manager/{managerId}")
                     .access(team.hrOrManagerMovingWithinTeam("id", "managerId"))
 
-                // Every other change (hiring, profile, termination, departments...) stays HR/ADMIN.
-                .requestMatchers("/employees/**", "/departments/**").hasAnyRole(Role.HR.name(), Role.ADMIN.name())
+                // Every other change (hiring, profile, termination, departments, offices, projects) stays HR/ADMIN.
+                .requestMatchers("/employees/**", "/departments/**", "/offices/**", "/projects/**")
+                    .hasAnyRole(Role.HR.name(), Role.ADMIN.name())
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())));

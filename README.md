@@ -13,9 +13,15 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
   list someone's direct reports, everyone below them at any depth, or their chain of managers. The API
   rejects changes that would create a loop.
 - **Employee lifecycle.** Create, update and put on leave. Terminating an employee keeps their record,
-  removes their reporting and department links, and disables their login.
-- **Directory search.** Filter by name prefix, status, department, skill and company. All list
-  endpoints are paginated.
+  removes their reporting, department and office links and their open project assignments, and
+  disables their login. Finished project assignments are kept as history.
+- **Directory search.** Filter by name prefix, status, department, skill, company, office and free
+  capacity. All list endpoints are paginated.
+- **Offices.** Each employee can be placed in one office. Offices can be searched by name or city.
+- **Projects and staffing.** Projects have a status, dates, an owning department and a lead. People
+  join with a role and an allocation percentage. **Nobody can be allocated more than 100% across
+  open projects**, and search can find people with free capacity, e.g.
+  `/employees?skill=java&maxAllocation=50`.
 - **Roles and manager self-service.** Roles are ADMIN, HR and EMPLOYEE. A login linked to an employee
   can manage that employee's team. The org chart decides who is in the team, so there is no separate
   manager role to keep in sync.
@@ -38,14 +44,28 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
 (:Department)-[:HEADED_BY]->(:Employee)       department head
 (:Employee)-[:HAS_SKILL]->(:Skill)
 (:Employee)-[:WORKS_FOR]->(:Company)
+(:Employee)-[:LOCATED_AT]->(:Office)
+(:Employee)-[:WORKS_ON {role, allocationPercent, since}]->(:Project)
+(:Project)-[:LED_BY]->(:Employee)             project lead
+(:Project)-[:OWNED_BY]->(:Department)         owning department
 (:AppUser {employeeId})                        login, optionally linked to an employee
 (:AuditEvent)                                  append-only audit trail
 ```
 
-The `Employee` and `Department` entities map only their links to skills and companies. The org-chart
-links (manager, membership, parent, head) are read and written with targeted Cypher in
-`EmployeeQueries` and `DepartmentQueries`. That way, loading one employee never loads the rest of the
-organisation.
+The `Employee` and `Department` entities map only their links to skills and companies. All other
+links (manager, membership, parent, head, office, projects) are read and written with targeted Cypher
+in the `*Queries` classes. That way, loading one employee never loads the rest of the organisation.
+
+### Projects and allocation
+
+- Project status is `PLANNED`, `ACTIVE`, `ON_HOLD`, `COMPLETED` or `CANCELLED`. The first three
+  count as **open**.
+- An employee's allocation is the sum of `allocationPercent` over their open projects. It can never
+  exceed 100%. This is checked when someone joins a project or their allocation changes, and when a
+  finished project is reopened.
+- Assignments on completed and cancelled projects are kept as history but don't count toward
+  allocation. People can only join open projects.
+- A project with any members, including past ones, can't be deleted. Set it to `CANCELLED` instead.
 
 ## AI assistant
 
@@ -67,10 +87,12 @@ START -> [agent] --tool calls--> [tools] --+
 The tools are in `aiservice/agent/OrgTools`. They are **read-only** and cover only what every
 logged-in user can already read through the API:
 
-- searching employees
+- searching employees, including by office and free capacity
 - employee details
 - reporting chain, direct reports and whole team
 - finding departments and their members
+- finding offices
+- finding projects, project members and an employee's projects
 
 The assistant can't change data or read audit history, so it can't be used to get around
 permissions. If a tool fails, for example with an unknown id, the error goes back to the model as a
@@ -140,9 +162,9 @@ token into the **Authorize** button.
 | Who | Can do |
 |---|---|
 | **ADMIN** | Everything, including managing logins and reading the full audit log. |
-| **HR** | Hire, update, terminate and move employees. Manage departments. Read any employee's or department's change history. |
+| **HR** | Hire, update, terminate and move employees. Manage departments, offices and projects, including who works on them. Read the change history of any employee, department, office or project. |
 | **Manager** (any login linked to an employee who has reports) | For people below them in the org chart: change leave status, edit skills, and move a report to another manager inside their own team. |
-| **Everyone logged in** | Read the directory, org chart and departments. Use the AI assistant. |
+| **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Use the AI assistant. |
 
 Managers can't edit their own record, and they can't reach anyone outside their reporting line.
 
@@ -164,7 +186,7 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/employees?name=&status=&departmentId=&skill=&company=` | Directory search. |
+| GET | `/employees?name=&status=&departmentId=&skill=&company=&officeId=&maxAllocation=` | Directory search. `maxAllocation` (0-100) finds people with free capacity. |
 | GET | `/employees/me` | Your own employee profile. |
 | POST | `/employees` | Hire. `departmentId` and `managerId` are optional. |
 | GET / PUT | `/employees/{id}` | Read or update a profile. |
@@ -176,6 +198,8 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | GET | `/employees/{id}/reporting-chain` | Managers from this employee up to the top. |
 | PUT / DELETE | `/employees/{id}/department/{departmentId}` | Set or remove department membership. |
 | PUT | `/employees/{id}/company/{companyId}` | Set the employee's company. |
+| PUT / DELETE | `/employees/{id}/office/{officeId}` | Set or remove the employee's office. |
+| GET | `/employees/{id}/projects` | The employee's projects and total allocation on open ones. |
 | POST / PUT | `/employees/{id}/skills` | Add one skill, or replace all skills. |
 | DELETE | `/employees/{id}/skills/{skillId}` | Remove a skill. |
 | GET | `/employees/{id}/history` | Change history for this employee. HR or ADMIN. |
@@ -192,6 +216,29 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | PUT / DELETE | `/departments/{id}/head/{employeeId}` | Set or remove the department head. |
 | GET | `/departments/{id}/history` | Change history for this department. HR or ADMIN. |
 
+### Offices
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET / POST | `/offices?q=` | List or create offices. `q` matches name or city. |
+| GET / PUT / DELETE | `/offices/{id}` | Read, update or delete. Only empty offices can be deleted. |
+| GET | `/offices/{id}/employees` | People in this office. |
+| GET | `/offices/{id}/history` | Change history. HR or ADMIN. |
+
+### Projects
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET / POST | `/projects?name=&status=&departmentId=` | List or create projects. |
+| GET / PUT / DELETE | `/projects/{id}` | Read, update or delete. Only projects that never had members can be deleted. |
+| PUT | `/projects/{id}/status` | Change status. Reopening is refused if it would put anyone over 100%. |
+| PUT / DELETE | `/projects/{id}/lead/{employeeId}` | Set or remove the project lead. |
+| PUT / DELETE | `/projects/{id}/department/{departmentId}` | Set or remove the owning department. |
+| GET | `/projects/{id}/members` | Who is on the project, with role and allocation. |
+| PUT | `/projects/{id}/members/{employeeId}` | Add someone, or change their role or allocation: `{"role":"...","allocationPercent":50}`. |
+| DELETE | `/projects/{id}/members/{employeeId}` | Remove someone from the project. |
+| GET | `/projects/{id}/history` | Change history, including membership changes. HR or ADMIN. |
+
 ### Audit and AI
 
 | Method | Endpoint | Description |
@@ -207,7 +254,7 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | 401 | Not logged in, or the token is invalid or expired. |
 | 403 | Not allowed for your role or team. |
 | 404 | Not found. |
-| 409 | Conflict: a duplicate code or email, a reporting or department loop, or an action blocked by the current state, e.g. terminating someone who still has direct reports. |
+| 409 | Conflict: a duplicate code or email, a reporting or department loop, an allocation over 100%, or an action blocked by the current state, e.g. terminating someone who still has direct reports. |
 
 ## Database migrations
 
@@ -219,6 +266,7 @@ Scripts in `src/main/resources/neo4j/migrations` run in order at startup. Each o
 | V0002 | Unique constraints and indexes for employees, departments, skills, companies and logins. |
 | V0003 | Makes sure each employee is linked to at most one login. |
 | V0004 | Indexes for the audit trail. |
+| V0005 | Constraints and indexes for offices and projects. |
 
 To change the schema, add a new `V0005__description.cypher` file. Never edit a migration that has
 already been applied.
@@ -234,6 +282,8 @@ access to Aura to run them. They cover:
 
 - **Web layer:** authentication, role and team permissions, validation and paging.
 - **Services:** reporting and department cycles, termination rules, directory filters, uniqueness.
+- **Projects and offices:** the 100% allocation limit, reopening checks, availability search, and
+  how termination handles projects and offices.
 - **Manager access:** the team check against a real org chart.
 - **Audit trail:** only changed fields are recorded, and a failed change leaves no audit event.
 - **Migrations:** run against data in the old `Person` format.
@@ -266,5 +316,6 @@ src/main/java/com/example/neo4j/
 - **Companies.** There's no API to create companies yet. Assigning an existing company works.
 - **Audit tamper protection.** The application can't change audit events, but anyone with direct
   database access could. For strict compliance, also stream audit events to a write-once store.
-- **Reporting loops under concurrency.** The loop check isn't protected by a database lock. Two
-  managers reassigned at exactly the same moment could, rarely, still create a loop.
+- **Checks under concurrency.** The reporting-loop check and the 100% allocation check aren't
+  protected by a database lock. Two changes made at exactly the same moment could, rarely, get past
+  them.

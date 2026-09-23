@@ -39,6 +39,7 @@ import com.example.neo4j.dto.UpdateEmployeeRequest;
 import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.repository.DepartmentQueries;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.security.Role;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
@@ -55,7 +56,7 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 @ImportAutoConfiguration(MigrationsAutoConfiguration.class)
 @Import({EmployeeService.class, DepartmentService.class, UserService.class, EmployeeQueries.class,
-        DepartmentQueries.class, AuditLog.class, AuditTrailTests.Passwords.class})
+        DepartmentQueries.class, ProjectQueries.class, AuditLog.class, AuditTrailTests.Passwords.class})
 class AuditTrailTests {
 
     @TestConfiguration

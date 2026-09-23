@@ -17,6 +17,9 @@ public record EmployeeResponse(
         DepartmentSummary department,
         EmployeeSummary manager,
         CompanyResponse company,
+        OfficeSummary office,
         List<SkillResponse> skills,
-        long directReportCount) {
+        long directReportCount,
+        // Total allocation across open projects, 0-100.
+        int allocationPercent) {
 }

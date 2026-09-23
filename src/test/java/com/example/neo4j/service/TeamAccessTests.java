@@ -28,6 +28,7 @@ import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.repository.AppUserRepository;
 import com.example.neo4j.repository.DepartmentQueries;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.security.Role;
 import com.example.neo4j.support.EmbeddedNeo4j;
 
@@ -45,7 +46,7 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
 @DataNeo4jTest
 @ImportAutoConfiguration(MigrationsAutoConfiguration.class)
 @Import({UserService.class, EmployeeService.class, EmployeeQueries.class, DepartmentQueries.class,
-        AuditLog.class, TeamAccessTests.Passwords.class})
+        ProjectQueries.class, AuditLog.class, TeamAccessTests.Passwords.class})
 class TeamAccessTests {
 
     @TestConfiguration

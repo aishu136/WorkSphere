@@ -37,6 +37,8 @@ import com.example.neo4j.repository.CompanyRepository;
 import com.example.neo4j.repository.DepartmentRepository;
 import com.example.neo4j.repository.EmployeeQueries;
 import com.example.neo4j.repository.EmployeeRepository;
+import com.example.neo4j.repository.OfficeRepository;
+import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.repository.SkillRepository;
 
 /*
@@ -54,16 +56,21 @@ public class EmployeeService {
 	private final DepartmentRepository departmentRepository;
 	private final SkillRepository skillRepository;
 	private final CompanyRepository companyRepository;
+	private final OfficeRepository officeRepository;
+	private final ProjectQueries projectQueries;
 	private final AuditLog auditLog;
 
 	public EmployeeService(EmployeeRepository employeeRepository, EmployeeQueries employeeQueries,
 			DepartmentRepository departmentRepository, SkillRepository skillRepository,
-			CompanyRepository companyRepository, AuditLog auditLog) {
+			CompanyRepository companyRepository, OfficeRepository officeRepository, ProjectQueries projectQueries,
+			AuditLog auditLog) {
 		this.employeeRepository = employeeRepository;
 		this.employeeQueries = employeeQueries;
 		this.departmentRepository = departmentRepository;
 		this.skillRepository = skillRepository;
 		this.companyRepository = companyRepository;
+		this.officeRepository = officeRepository;
+		this.projectQueries = projectQueries;
 		this.auditLog = auditLog;
 	}
 
@@ -181,7 +188,8 @@ public class EmployeeService {
 
 	/**
 	 * Offboards an employee. The record is kept (status TERMINATED) rather than deleted;
-	 * current reporting line and department membership are removed and their login is disabled.
+	 * current reporting line, department, office and open project assignments are removed
+	 * (finished projects are kept as history) and their login is disabled.
 	 */
 	@Transactional
 	public EmployeeResponse terminate(String id) {
@@ -197,6 +205,9 @@ public class EmployeeService {
 		if (employeeQueries.headsAnyDepartment(id)) {
 			throw new ConflictException("Assign a new department head before terminating this employee");
 		}
+		if (projectQueries.leadsOpenProject(id)) {
+			throw new ConflictException("Assign a new lead to this employee's open projects before terminating");
+		}
 
 		EmployeeResponse before = findById(id);
 
@@ -206,14 +217,18 @@ public class EmployeeService {
 
 		employeeQueries.clearManager(id);
 		employeeQueries.clearDepartment(id);
+		employeeQueries.clearOffice(id);
+		List<String> removedFromProjects = projectQueries.removeOpenAssignments(id);
 		employeeQueries.disableLinkedLogin(id);
 
-		// The manager and department links are removed, so record what they were.
+		// These links are removed, so record what they were.
 		Map<String, Object> details = new LinkedHashMap<>();
 		details.put("previousStatus", before.status());
 		details.put("terminationDate", employee.getTerminationDate());
 		details.put("previousManagerId", managerId(before));
 		details.put("previousDepartmentId", departmentId(before));
+		details.put("previousOfficeId", before.office() == null ? null : before.office().id());
+		details.put("removedFromProjectIds", removedFromProjects);
 		audit(AuditAction.EMPLOYEE_TERMINATED, id, details);
 
 		log.info("Terminated employee {}", id);
@@ -322,6 +337,44 @@ public class EmployeeService {
 		employeeQueries.clearDepartment(id);
 		audit(AuditAction.EMPLOYEE_DEPARTMENT_CHANGED, id,
 				new Changes().track("departmentId", departmentId(before), null).asMap());
+
+		return findById(id);
+	}
+
+	// ---- Office ---------------------------------------------------------------
+
+	@Transactional
+	public EmployeeResponse assignOffice(String id, String officeId) {
+
+		requireNotTerminated(requireEmployee(id));
+
+		if (!officeRepository.existsById(officeId)) {
+			throw new ResourceNotFoundException("Office not found with id: " + officeId);
+		}
+
+		EmployeeResponse before = findById(id);
+		String previous = before.office() == null ? null : before.office().id();
+		if (officeId.equals(previous)) {
+			return before;
+		}
+
+		employeeQueries.setOffice(id, officeId);
+		audit(AuditAction.EMPLOYEE_OFFICE_CHANGED, id, new Changes().track("officeId", previous, officeId).asMap());
+
+		return findById(id);
+	}
+
+	@Transactional
+	public EmployeeResponse removeOffice(String id) {
+
+		EmployeeResponse before = findById(id);
+		if (before.office() == null) {
+			return before;
+		}
+
+		employeeQueries.clearOffice(id);
+		audit(AuditAction.EMPLOYEE_OFFICE_CHANGED, id,
+				new Changes().track("officeId", before.office().id(), null).asMap());
 
 		return findById(id);
 	}

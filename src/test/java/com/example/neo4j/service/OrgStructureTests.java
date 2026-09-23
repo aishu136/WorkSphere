@@ -34,6 +34,7 @@ import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.repository.CompanyRepository;
 import com.example.neo4j.repository.DepartmentQueries;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.support.EmbeddedNeo4j;
 
 import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
@@ -45,7 +46,7 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
 @DataNeo4jTest
 @ImportAutoConfiguration(MigrationsAutoConfiguration.class)
 @Import({EmployeeService.class, DepartmentService.class, EmployeeQueries.class, DepartmentQueries.class,
-        AuditLog.class})
+        ProjectQueries.class, AuditLog.class})
 class OrgStructureTests {
 
     private static final Neo4j neo4j = EmbeddedNeo4j.start();
@@ -171,12 +172,12 @@ class OrgStructureTests {
 
         assertThat(names(employees.search(EmployeeFilter.byName("PRI"), FIRST_PAGE)))
                 .containsExactly("Pritam Das", "Priya Sharma");
-        assertThat(names(employees.search(new EmployeeFilter("pri", null, eng.id(), null, null), FIRST_PAGE)))
+        assertThat(names(employees.search(new EmployeeFilter("pri", null, eng.id(), null, null, null, null), FIRST_PAGE)))
                 .containsExactly("Priya Sharma");
-        assertThat(names(employees.search(new EmployeeFilter(null, null, null, "JAVA", "acme"), FIRST_PAGE)))
+        assertThat(names(employees.search(new EmployeeFilter(null, null, null, "JAVA", "acme", null, null), FIRST_PAGE)))
                 .containsExactly("Priya Sharma");
 
-        Page<EmployeeResponse> page = employees.search(new EmployeeFilter(null, null, null, null, null),
+        Page<EmployeeResponse> page = employees.search(new EmployeeFilter(null, null, null, null, null, null, null),
                 PageRequest.of(1, 2));
         assertThat(page.getTotalElements()).isEqualTo(3);
         assertThat(names(page)).containsExactly("Priya Sharma");
@@ -219,7 +220,7 @@ class OrgStructureTests {
         assertThat(terminated.department()).isNull();
 
         // Record is kept but excluded from active searches, and can't be changed further.
-        assertThat(names(employees.search(new EmployeeFilter(null, EmploymentStatus.ACTIVE, null, null, null),
+        assertThat(names(employees.search(new EmployeeFilter(null, EmploymentStatus.ACTIVE, null, null, null, null, null),
                 FIRST_PAGE))).containsExactly("Boss", "Dev");
         assertThatThrownBy(() -> employees.assignManager(dev.id(), lead.id())).isInstanceOf(ConflictException.class);
         assertThatThrownBy(() -> employees.changeStatus(lead.id(), EmploymentStatus.ACTIVE))

@@ -144,6 +144,21 @@ public class EmployeeController {
         return ResponseEntity.ok(service.removeDepartment(id));
     }
 
+    // ---- Office ---------------------------------------------------------------
+
+    @PutMapping("/{id}/office/{officeId}")
+    public ResponseEntity<EmployeeResponse> assignOffice(
+            @PathVariable("id") String id,
+            @PathVariable("officeId") String officeId) {
+
+        return ResponseEntity.ok(service.assignOffice(id, officeId));
+    }
+
+    @DeleteMapping("/{id}/office")
+    public ResponseEntity<EmployeeResponse> removeOffice(@PathVariable("id") String id) {
+        return ResponseEntity.ok(service.removeOffice(id));
+    }
+
     // ---- Company and skills ---------------------------------------------------
 
     @PutMapping("/{id}/company/{companyId}")

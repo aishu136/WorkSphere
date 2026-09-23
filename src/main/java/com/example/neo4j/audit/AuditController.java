@@ -16,7 +16,7 @@ import jakarta.validation.Valid;
  * to change or delete audit events.
  *
  * /audit (everything, including logins): ADMIN only.
- * /employees/{id}/history and /departments/{id}/history: HR or ADMIN.
+ * /employees, /departments, /offices and /projects/{id}/history: HR or ADMIN.
  * Enforced in SecurityConfig.
  */
 @RestController
@@ -52,5 +52,24 @@ public class AuditController {
 
         return ResponseEntity.ok(PageResponse.of(auditLog.search(
                 AuditFilter.forTarget(AuditTargetType.DEPARTMENT, id), paging.toPageable())));
+    }
+
+    @GetMapping("/offices/{id}/history")
+    public ResponseEntity<PageResponse<AuditEventResponse>> officeHistory(
+            @PathVariable("id") String id,
+            @Valid @ParameterObject PageParams paging) {
+
+        return ResponseEntity.ok(PageResponse.of(auditLog.search(
+                AuditFilter.forTarget(AuditTargetType.OFFICE, id), paging.toPageable())));
+    }
+
+    // Includes membership changes (who joined or left, and allocation changes).
+    @GetMapping("/projects/{id}/history")
+    public ResponseEntity<PageResponse<AuditEventResponse>> projectHistory(
+            @PathVariable("id") String id,
+            @Valid @ParameterObject PageParams paging) {
+
+        return ResponseEntity.ok(PageResponse.of(auditLog.search(
+                AuditFilter.forTarget(AuditTargetType.PROJECT, id), paging.toPageable())));
     }
 }
