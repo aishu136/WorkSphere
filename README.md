@@ -181,7 +181,7 @@ All secrets come from environment variables. None are stored in the repository.
 | `JWT_SECRET` | yes | Key used to sign login tokens. At least 32 characters. The app won't start with a shorter one. |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | first start | Creates the first ADMIN account when the database has no users yet. Can be removed afterwards. |
 | `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` | for email | SMTP server for notifications. For STARTTLS also set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true`. Without these, emails are only logged. |
-| `NOTIFY_HR_EMAIL` | for email | Shared HR mailbox that receives new and withdrawn staffing requests. |
+| `NOTIFY_HR_EMAIL` | for email | Shared HR mailbox. It receives new and withdrawn staffing requests, and leave and reporting-line changes made by managers. |
 | `NOTIFY_FROM` | no | Sender address. Defaults to `no-reply@worksphere.local`. |
 | `APP_BASE_URL` | no | Frontend address used for links in emails, e.g. `https://worksphere.example.com`. |
 | `app.outbox.*` (properties) | no | `poll-interval` (PT30S), `batch-size` (50), `max-attempts` (8), `retention` (P30D). |
@@ -234,6 +234,22 @@ token into the **Authorize** button.
 | **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Use the AI assistant. |
 
 Managers can't edit their own record, and they can't reach anyone outside their reporting line.
+
+### Manager self-service notifications
+
+Changes a manager makes don't need approval, so the people affected are told by email:
+
+| A manager... | Who is emailed |
+|---|---|
+| changes someone's status (`ACTIVE` / `ON_LEAVE`) | the employee, and the HR mailbox |
+| moves a report to another manager in their team | the employee, the new manager, and the HR mailbox |
+| changes someone's skills | the employee |
+
+- The same changes made by HR or ADMIN are recorded in the audit trail but not emailed.
+- Nobody is emailed about their own action, e.g. a manager who moves someone under themselves.
+- Requests that change nothing (a status already set, a skill already held) send nothing.
+- These emails go through the same outbox as staffing emails (see
+  [Email outbox and retries](#email-outbox-and-retries)).
 
 ## API overview
 
@@ -370,6 +386,8 @@ access to Aura to run them. They cover:
 - **Staffing approvals:** request and approve, rules re-checked at approval, requests refused up
   front, no self-approval, requester-only cancel, and a stale second decision being refused.
 - **Email notifications and outbox:** recipients and content for each step, and missing addresses.
+  Manager self-service emails: sent only for manager changes, not for HR changes, no-op changes, or
+  changes that fail.
   Also, against a real database: emails saved with the change and none after a rollback; retries with
   back-off until delivery; giving up and admin retry; claiming; waiting without a mail server; and
   cleanup of old sent emails.

@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -33,6 +34,7 @@ import com.example.neo4j.entity.EmploymentStatus;
 import com.example.neo4j.entity.Skill;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.exception.ResourceNotFoundException;
+import com.example.neo4j.notification.EmployeeChangeEvent;
 import com.example.neo4j.repository.CompanyRepository;
 import com.example.neo4j.repository.DepartmentRepository;
 import com.example.neo4j.repository.EmployeeQueries;
@@ -40,6 +42,7 @@ import com.example.neo4j.repository.EmployeeRepository;
 import com.example.neo4j.repository.OfficeRepository;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.repository.SkillRepository;
+import com.example.neo4j.security.CurrentUser;
 
 /*
  * Every change is written to the audit log inside the same transaction, so a change and
@@ -59,11 +62,12 @@ public class EmployeeService {
 	private final OfficeRepository officeRepository;
 	private final ProjectQueries projectQueries;
 	private final AuditLog auditLog;
+	private final ApplicationEventPublisher events;
 
 	public EmployeeService(EmployeeRepository employeeRepository, EmployeeQueries employeeQueries,
 			DepartmentRepository departmentRepository, SkillRepository skillRepository,
 			CompanyRepository companyRepository, OfficeRepository officeRepository, ProjectQueries projectQueries,
-			AuditLog auditLog) {
+			AuditLog auditLog, ApplicationEventPublisher events) {
 		this.employeeRepository = employeeRepository;
 		this.employeeQueries = employeeQueries;
 		this.departmentRepository = departmentRepository;
@@ -72,6 +76,7 @@ public class EmployeeService {
 		this.officeRepository = officeRepository;
 		this.projectQueries = projectQueries;
 		this.auditLog = auditLog;
+		this.events = events;
 	}
 
 	// ---- Directory ------------------------------------------------------------
@@ -181,6 +186,7 @@ public class EmployeeService {
 			employeeRepository.save(employee);
 
 			audit(AuditAction.EMPLOYEE_STATUS_CHANGED, id, changes.asMap());
+			publishChange(id, EmployeeChangeEvent.Type.STATUS_CHANGED, changes.asMap());
 		}
 
 		return findById(id);
@@ -264,8 +270,9 @@ public class EmployeeService {
 		}
 
 		employeeQueries.setManager(id, managerId);
-		audit(AuditAction.EMPLOYEE_MANAGER_CHANGED, id,
-				new Changes().track("managerId", managerId(before), managerId).asMap());
+		Map<String, Object> managerChange = new Changes().track("managerId", managerId(before), managerId).asMap();
+		audit(AuditAction.EMPLOYEE_MANAGER_CHANGED, id, managerChange);
+		publishChange(id, EmployeeChangeEvent.Type.MANAGER_CHANGED, managerChange);
 
 		return findById(id);
 	}
@@ -481,6 +488,13 @@ public class EmployeeService {
 		details.put("added", added);
 		details.put("removed", removed);
 		audit(AuditAction.EMPLOYEE_SKILLS_CHANGED, employeeId, details);
+		publishChange(employeeId, EmployeeChangeEvent.Type.SKILLS_CHANGED, details);
+	}
+
+	// Notifications decide from selfService whether anyone should be emailed (see EmployeeChangeNotifier).
+	private void publishChange(String employeeId, EmployeeChangeEvent.Type type, Map<String, Object> details) {
+		events.publishEvent(new EmployeeChangeEvent(employeeId, type, details, CurrentUser.username(),
+				CurrentUser.isSelfService()));
 	}
 
 	private static Set<String> skillNames(List<Skill> skills) {

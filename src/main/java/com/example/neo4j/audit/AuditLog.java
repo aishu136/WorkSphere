@@ -17,12 +17,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.neo4j.core.Neo4jClient;
-import org.springframework.security.authentication.AnonymousAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.example.neo4j.security.CurrentUser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,7 +38,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 @Service
 public class AuditLog {
 
-    public static final String SYSTEM_ACTOR = "system";
+    public static final String SYSTEM_ACTOR = CurrentUser.SYSTEM;
 
     // Fixed settings so the stored format never changes with the application's JSON config.
     private static final ObjectMapper JSON = JsonMapper.builder()
@@ -65,7 +63,7 @@ public class AuditLog {
     /** Records an action by the currently logged-in user ("system" when there is none). */
     @Transactional
     public void record(AuditAction action, AuditTargetType targetType, String targetId, Map<String, Object> details) {
-        recordAs(currentActor(), action, targetType, targetId, details);
+        recordAs(CurrentUser.username(), action, targetType, targetId, details);
     }
 
     /** Records an action on behalf of an explicit actor, e.g. the username on a login attempt. */
@@ -147,14 +145,6 @@ public class AuditLog {
                 .all());
 
         return new PageImpl<>(content, pageable, total);
-    }
-
-    private static String currentActor() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken) {
-            return SYSTEM_ACTOR;
-        }
-        return auth.getName();
     }
 
     private static AuditEventResponse toResponse(Record record) {

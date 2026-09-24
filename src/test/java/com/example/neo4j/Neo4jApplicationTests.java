@@ -150,6 +150,13 @@ class Neo4jApplicationTests {
 						.content("{\"name\":\"Renamed\",\"email\":\"dev@example.com\",\"hireDate\":\"2024-06-01\"}"))
 				.andExpect(status().isForbidden());
 
+		// The manager's change queued an email to the employee (no HR mailbox is configured here).
+		mvc.perform(get("/outbox").header("Authorization", auth))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].recipient").value("dev@example.com"))
+				.andExpect(jsonPath("$.content[0].subject").value("[WorkSphere] Your status is now: On leave"));
+
 		// ---- Audit trail ----
 
 		mvc.perform(get("/employees/" + dev + "/history").header("Authorization", auth))
