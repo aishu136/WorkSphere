@@ -7,6 +7,7 @@ import java.util.Map;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
 
 import com.example.neo4j.dto.DepartmentResponse;
@@ -15,19 +16,23 @@ import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeProjectsResponse;
 import com.example.neo4j.entity.EmploymentStatus;
 import com.example.neo4j.entity.ProjectStatus;
+import com.example.neo4j.entity.StaffingRequestStatus;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
 import com.example.neo4j.service.OfficeService;
 import com.example.neo4j.service.ProjectService;
+import com.example.neo4j.service.StaffingService;
 
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.invocation.InvocationParameters;
 
 /**
- * Tools the AI assistant can call. They are deliberately read-only and limited to data every
- * logged-in user can already read through the API (directory, org chart, departments, offices,
- * projects), so the assistant can never change anything or reveal more than the caller could
- * see anyway.
+ * Tools the AI assistant can call. They are deliberately read-only and limited to data the caller
+ * can already read through the API, so the assistant can never change anything or reveal more
+ * than the caller could see anyway. Most tools cover data every logged-in user can read
+ * (directory, org chart, departments, offices, projects, skills); staffing requests are checked
+ * against the {@link Caller} with the same rule as the REST endpoints.
  * Audit history is intentionally not exposed.
  *
  * Results are capped so a single call can't flood the model's context.
@@ -43,13 +48,15 @@ public class OrgTools {
     private final DepartmentService departments;
     private final OfficeService offices;
     private final ProjectService projects;
+    private final StaffingService staffing;
 
     public OrgTools(EmployeeService employees, DepartmentService departments, OfficeService offices,
-                    ProjectService projects) {
+                    ProjectService projects, StaffingService staffing) {
         this.employees = employees;
         this.departments = departments;
         this.offices = offices;
         this.projects = projects;
+        this.staffing = staffing;
     }
 
     @Tool("Search the employee directory. All filters are optional and combine with AND. "
@@ -158,6 +165,38 @@ public class OrgTools {
         return projects.projectsOf(employeeId);
     }
 
+    @Tool("Find skills by name and how many current employees have each. Use it to get the exact skill "
+            + "name before searching employees by skill (e.g. 'kube' finds 'Kubernetes'). "
+            + "Leave empty to list skills.")
+    public Map<String, Object> findSkills(
+            @P(value = "Part of the skill name, case-insensitive", required = false) String name) {
+
+        var page = employees.skills(blankToNull(name), PageRequest.of(0, MAX_LIST_RESULTS));
+        return listResult(page.getTotalElements(), page.getContent());
+    }
+
+    @Tool("List staffing requests (project leads asking HR to assign or remove people), oldest first. "
+            + "Only HR can list requests across all projects; a project lead can see requests for a "
+            + "project they lead, so pass its projectId.")
+    public Map<String, Object> getStaffingRequests(
+            @P(value = "Project id (use findProjects to get it)", required = false) String projectId,
+            @P(value = "PENDING, APPROVED, REJECTED or CANCELLED", required = false) String status,
+            InvocationParameters parameters) {
+
+        // Same rule as GET /staffing-requests (HR) and GET /projects/{id}/staffing-requests (HR or lead).
+        Caller caller = parameters == null ? null : parameters.get(Caller.PARAMETER);
+        String project = blankToNull(projectId);
+        boolean allowed = caller != null && (caller.hrOrAdmin()
+                || (project != null && staffing.isProjectLead(caller.username(), project)));
+        if (!allowed) {
+            throw new AccessDeniedException("You can only see staffing requests for projects you lead; "
+                    + "HR can see all of them.");
+        }
+
+        var page = staffing.search(project, parseStaffingStatus(status), PageRequest.of(0, MAX_LIST_RESULTS));
+        return listResult(page.getTotalElements(), page.getContent());
+    }
+
     // ---- Helpers ----------------------------------------------------------
 
     // Tells the model when a list was cut short, so it doesn't present a partial list as complete.
@@ -202,6 +241,18 @@ public class OrgTools {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Unknown project status '" + status
                     + "'. Use PLANNED, ACTIVE, ON_HOLD, COMPLETED or CANCELLED.");
+        }
+    }
+
+    private static StaffingRequestStatus parseStaffingStatus(String status) {
+        if (blankToNull(status) == null) {
+            return null;
+        }
+        try {
+            return StaffingRequestStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Unknown staffing request status '" + status
+                    + "'. Use PENDING, APPROVED, REJECTED or CANCELLED.");
         }
     }
 

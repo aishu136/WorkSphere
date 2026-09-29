@@ -26,6 +26,7 @@ import com.example.neo4j.dto.DepartmentSummary;
 import com.example.neo4j.dto.EmployeeFilter;
 import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeSummary;
+import com.example.neo4j.dto.SkillCount;
 import com.example.neo4j.dto.SkillRequest;
 import com.example.neo4j.dto.UpdateEmployeeRequest;
 import com.example.neo4j.entity.Company;
@@ -308,6 +309,11 @@ public class EmployeeService {
 	public List<EmployeeSummary> reportingChain(String id) {
 		requireExists(id);
 		return employeeQueries.reportingChain(id);
+	}
+
+	@Transactional(readOnly = true)
+	public Page<SkillCount> skills(String nameContains, Pageable pageable) {
+		return employeeQueries.skills(nameContains, pageable);
 	}
 
 	// ---- Department -----------------------------------------------------------

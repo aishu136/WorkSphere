@@ -73,6 +73,20 @@ class Neo4jApplicationTests {
 		return body.isEmpty() ? null : json.readTree(body);
 	}
 
+	// The model calls one tool, then answers with that tool's raw result.
+	private void answerWithToolResult(String tool, String argumentsJson) {
+		org.mockito.Mockito.doAnswer(invocation -> {
+					List<ChatMessage> messages = ((ChatRequest) invocation.getArgument(0)).messages();
+					ChatMessage last = messages.get(messages.size() - 1);
+					AiMessage reply = last instanceof ToolExecutionResultMessage result
+							? AiMessage.from(result.text())
+							: AiMessage.from(ToolExecutionRequest.builder().id("t").name(tool)
+									.arguments(argumentsJson).build());
+					return ChatResponse.builder().aiMessage(reply).build();
+				})
+				.when(chatModel).chat(org.mockito.ArgumentMatchers.any(ChatRequest.class));
+	}
+
 	@Test
 	void adminCanBuildAndReadAnOrgChart() throws Exception {
 
@@ -205,17 +219,69 @@ class Neo4jApplicationTests {
 					return ChatResponse.builder().aiMessage(reply).build();
 				});
 
-		String answer = mvc.perform(post("/ai").header("Authorization", managerAuth)
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("{\"question\":\"Who is Dev's manager and when did they join?\"}"))
-				.andExpect(status().isOk())
-				.andReturn().getResponse().getContentAsString();
+		JsonNode aiResponse = call(post("/ai").header("Authorization", managerAuth)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"question\":\"Who is Dev's manager and when did they join?\"}"), 200);
 
-		org.assertj.core.api.Assertions.assertThat(answer)
+		org.assertj.core.api.Assertions.assertThat(aiResponse.get("answer").asText())
 				.contains("Dev Kumar")
 				.contains("Chitra CTO")
 				.contains("2024-06-01")
 				.contains("ON_LEAVE");
+		org.assertj.core.api.Assertions.assertThat(aiResponse.get("fallback").asBoolean()).isFalse();
+		String conversationId = aiResponse.get("conversationId").asText();
+
+		// A follow-up in the same conversation: the model sees the earlier question and answer.
+		// (doAnswer, because re-stubbing with when() would call the previous stub with a null request.)
+		org.mockito.Mockito.doAnswer(invocation -> ChatResponse.builder()
+						.aiMessage(AiMessage.from("messages seen: "
+								+ ((ChatRequest) invocation.getArgument(0)).messages().size()))
+						.build())
+				.when(chatModel).chat(org.mockito.ArgumentMatchers.any(ChatRequest.class));
+
+		mvc.perform(post("/ai").header("Authorization", managerAuth).contentType(MediaType.APPLICATION_JSON)
+						.content("{\"question\":\"And their team?\",\"conversationId\":\"%s\"}"
+								.formatted(conversationId)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.conversationId").value(conversationId))
+				// System prompt, first question, first answer, follow-up.
+				.andExpect(jsonPath("$.answer").value("messages seen: 4"));
+
+		// Skills: part of a name finds the skill and how many people have it.
+		call(post("/employees/" + dev + "/skills").header("Authorization", auth)
+				.contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Kubernetes\"}"), 200);
+		answerWithToolResult("findSkills", "{\"name\":\"KUBE\"}");
+
+		mvc.perform(post("/ai").header("Authorization", managerAuth).contentType(MediaType.APPLICATION_JSON)
+						.content("{\"question\":\"Who knows kube?\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.answer").value(org.hamcrest.Matchers.containsString(
+						"{\"name\":\"Kubernetes\",\"employees\":1}")));
+
+		// Staffing requests are HR or project lead only; Chitra leads no project.
+		answerWithToolResult("getStaffingRequests", "{}");
+
+		mvc.perform(post("/ai").header("Authorization", managerAuth).contentType(MediaType.APPLICATION_JSON)
+						.content("{\"question\":\"Which staffing requests are pending?\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.answer").value(org.hamcrest.Matchers.containsString("projects you lead")));
+
+		mvc.perform(post("/ai").header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+						.content("{\"question\":\"Which staffing requests are pending?\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.answer").value(org.hamcrest.Matchers.containsString("\"total\":0")));
+
+		// The model failing (e.g. Bedrock down) gives a stand-in answer, not a 500.
+		org.mockito.Mockito.doThrow(new RuntimeException("Bedrock is down"))
+				.when(chatModel).chat(org.mockito.ArgumentMatchers.any(ChatRequest.class));
+
+		mvc.perform(post("/ai").header("Authorization", managerAuth).contentType(MediaType.APPLICATION_JSON)
+						.content("{\"question\":\"Anyone there?\",\"conversationId\":\"%s\"}"
+								.formatted(conversationId)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.fallback").value(true))
+				.andExpect(jsonPath("$.conversationId").value(conversationId))
+				.andExpect(jsonPath("$.answer").value(org.hamcrest.Matchers.containsString("unavailable")));
 
 		// The manager can't read the audit log or history.
 		mvc.perform(get("/audit").header("Authorization", managerAuth)).andExpect(status().isForbidden());

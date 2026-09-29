@@ -24,6 +24,7 @@ import com.example.neo4j.dto.EmployeeFilter;
 import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.dto.OfficeSummary;
+import com.example.neo4j.dto.SkillCount;
 import com.example.neo4j.dto.SkillResponse;
 import com.example.neo4j.entity.EmploymentStatus;
 import com.example.neo4j.entity.ProjectStatus;
@@ -152,6 +153,37 @@ public class EmployeeQueries {
                 : "MATCH (e:Employee)-[:MEMBER_OF]->(:Department {id: $id})";
         return page(match, Map.of("id", departmentId), pageable, EMPLOYEE_PROJECTION,
                 EmployeeResponse.class, EmployeeQueries::toResponse);
+    }
+
+    // Skills whose name contains the text (case-insensitive; all skills when null), ordered by name.
+    public Page<SkillCount> skills(String nameContains, Pageable pageable) {
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("name", hasText(nameContains) ? nameContains.trim().toLowerCase(Locale.ROOT) : null);
+
+        String match = "MATCH (s:Skill) WHERE $name IS NULL OR toLower(s.name) CONTAINS $name";
+
+        long total = client.query(match + " RETURN count(s) AS total")
+                .bindAll(params)
+                .fetchAs(Long.class).one().orElse(0L);
+
+        Map<String, Object> pageParams = new HashMap<>(params);
+        pageParams.put("skip", pageable.getOffset());
+        pageParams.put("limit", pageable.getPageSize());
+
+        List<SkillCount> content = List.copyOf(client.query(match + """
+                         WITH s ORDER BY toLower(s.name), s.id SKIP $skip LIMIT $limit
+                        RETURN s.name AS name,
+                               COUNT { (e:Employee)-[:HAS_SKILL]->(s) WHERE e.status <> 'TERMINATED' } AS employees
+                        ORDER BY toLower(name)
+                        """)
+                .bindAll(pageParams)
+                .fetchAs(SkillCount.class)
+                .mappedBy((types, record) -> new SkillCount(text(record.get("name")),
+                        record.get("employees").asLong()))
+                .all());
+
+        return new PageImpl<>(content, pageable, total);
     }
 
     public long countDirectReports(String employeeId) {

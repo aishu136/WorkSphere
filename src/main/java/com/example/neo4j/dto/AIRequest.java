@@ -16,4 +16,9 @@ public class AIRequest {
     @Size(max = 1000)
     private String question;
 
+    // Optional: the conversationId from an earlier answer, to ask a follow-up question.
+    // Leave it out to start a new conversation.
+    @Size(max = 64)
+    private String conversationId;
+
 }

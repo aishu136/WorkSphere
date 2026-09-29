@@ -82,6 +82,12 @@ public class StaffingService {
 		return staffingQueries.search(projectId, status, pageable);
 	}
 
+	/** True if the login belongs to the (active) lead of the project. */
+	@Transactional(readOnly = true)
+	public boolean isProjectLead(String username, String projectId) {
+		return projectQueries.isLedBy(username, projectId);
+	}
+
 	// ---- Lead --------------------------------------------------------------------
 
 	@Transactional
