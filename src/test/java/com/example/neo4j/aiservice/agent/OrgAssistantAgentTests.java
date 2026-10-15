@@ -390,7 +390,7 @@ class OrgAssistantAgentTests {
 
     private static StaffingRequestResponse staffingRequest() {
         return new StaffingRequestResponse("r-1", new ProjectSummary("p-1", "APOLLO", "Apollo", ProjectStatus.ACTIVE),
-                new EmployeeSummary("d-1", "Dev Kumar", "Engineer"), StaffingAction.ASSIGN, "Developer", 50,
+                new EmployeeSummary("d-1", "Dev Kumar", "Engineer"), StaffingAction.ASSIGN, "Developer", 50, null, null,
                 StaffingRequestStatus.PENDING, "lena", Instant.parse("2026-09-01T10:00:00Z"), null, null, null);
     }
 }

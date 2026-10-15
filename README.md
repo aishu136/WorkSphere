@@ -24,13 +24,14 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
   capacity. All list endpoints are paginated.
 - **Offices.** Each employee can be placed in one office. Offices can be searched by name or city.
 - **Projects and staffing.** Projects have a status, dates, an owning department and a lead. People
-  join with a role and an allocation percentage. **Nobody can be allocated more than 100% across
-  open projects**, and search can find people with free capacity, e.g.
-  `/employees?skill=java&maxAllocation=50`.
+  join with a role, an allocation percentage and dates. **Nobody can be allocated more than 100% on
+  any day**, so someone fully booked until March can be booked from April. Search can find people
+  with free capacity today, e.g. `/employees?skill=java&maxAllocation=50`.
 - **Skill levels and matching.** Every skill has a level from 1 (beginner) to 5 (expert). Projects
   list the skills they need and the minimum level for each, and `/projects/{id}/candidates` ranks
-  who could join: best skill match first, then people in the project's department, then most free
-  capacity. See [Skill levels and matching](#skill-levels-and-matching).
+  who could join over the project's dates: best skill match first, then people in the project's
+  department, then those least on leave, then most free capacity. See
+  [Skill levels and matching](#skill-levels-and-matching).
 - **Staffing approvals.** A project lead can request to add, change or remove people on their own
   open project. HR approves or rejects each request, and the change is only applied on approval.
   HR, the lead and the affected employee are notified by email, with automatic retries. See
@@ -59,7 +60,7 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
 (:Project)-[:REQUIRES {level}]->(:Skill)      skills a project needs, minimum level 1-5
 (:Employee)-[:WORKS_FOR]->(:Company)
 (:Employee)-[:LOCATED_AT]->(:Office)
-(:Employee)-[:WORKS_ON {role, allocationPercent, since}]->(:Project)
+(:Employee)-[:WORKS_ON {role, allocationPercent, since, startDate, endDate}]->(:Project)
 (:Project)-[:LED_BY]->(:Employee)             project lead
 (:Project)-[:OWNED_BY]->(:Department)         owning department
 (:AppUser {employeeId})                        login, optionally linked to an employee
@@ -74,9 +75,16 @@ in the `*Queries` classes. That way, loading one employee never loads the rest o
 
 - Project status is `PLANNED`, `ACTIVE`, `ON_HOLD`, `COMPLETED` or `CANCELLED`. The first three
   count as **open**.
-- An employee's allocation is the sum of `allocationPercent` over their open projects. It can never
-  exceed 100%. This is checked when someone joins a project or their allocation changes, and when a
-  finished project is reopened.
+- Each assignment runs from `startDate` to `endDate`, both inclusive. With no `endDate` it is
+  open-ended. When someone joins, the dates default to the project's dates, starting no earlier than
+  today. When an assignment is changed, a date that is left out keeps its current value. `since` is
+  the day they were added. Assignments made before dates existed start on that day (migration V0010).
+- **On any day**, the sum of `allocationPercent` over the open-project assignments running that day
+  can't exceed 100%. This is checked when someone joins a project, when their allocation or dates
+  change, when a staffing request is made and approved, and when a finished project is reopened. The
+  error names the busiest day, e.g. "already 100% allocated on 2030-03-15".
+- An employee's **current allocation**, shown on their profile and used by `maxAllocation`, counts
+  only the assignments running today.
 - Assignments on completed and cancelled projects are kept as history but don't count toward
   allocation. People can only join open projects.
 - A project with any members, including past ones, can't be deleted. Set it to `CANCELLED` instead.
@@ -91,14 +99,21 @@ Levels are 1 beginner, 2 basic, 3 intermediate, 4 advanced, 5 expert.
 - The directory can filter by level: `/employees?skill=java&minSkillLevel=4`.
 - A project's required skills use the same format, where the level is the minimum the project needs.
   HR or the project's lead can change them.
-- `GET /projects/{id}/candidates?allocationPercent=50` suggests people for an open project:
-  - **Who:** active employees who aren't on the project yet, have at least one required skill, and
-    have at least `allocationPercent` free capacity (default 1, so anyone not fully booked).
+- `GET /projects/{id}/candidates?allocationPercent=50&from=&to=` suggests people for an open project
+  over a period:
+  - **Period:** `from` to `to`. It defaults to the project's dates, starting no earlier than today.
+    If the project has no end date, the period is 90 days.
+  - **Who:** active employees who aren't on the project yet and have at least one required skill.
+    They need at least `allocationPercent` free on their busiest day in the period (default 1, so
+    anyone not fully booked), and can't be on approved leave for the whole period.
   - **Match %:** the average over the required skills. Meeting the level counts fully, being below
     it counts as your level divided by the required level, and not having the skill counts as 0.
     For example, Java 2 of a required 4, and no Kafka, gives (0.5 + 0) / 2 = 25%.
+  - **Leave:** each candidate shows their working days of approved and pending leave in the period.
+    They also get an availability percentage: the share of the period's working days they are not on
+    approved leave.
   - **Order:** highest match first, then people in the owning department or one of its
-    sub-departments, then most free capacity.
+    sub-departments, then highest availability, then most free capacity.
   - Each candidate lists their level in every required skill, so the gaps are visible.
 - Candidates are suggestions only. Adding someone still goes through a staffing request or HR.
 - Changes to skills and required skills are recorded in the history with what was added, removed and
@@ -396,18 +411,18 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | PUT / DELETE | `/projects/{id}/lead/{employeeId}` | Set or remove the project lead. |
 | PUT / DELETE | `/projects/{id}/department/{departmentId}` | Set or remove the owning department. |
 | GET | `/projects/{id}/members` | Who is on the project, with role and allocation. |
-| PUT | `/projects/{id}/members/{employeeId}` | Add someone, or change their role or allocation: `{"role":"...","allocationPercent":50}`. |
+| PUT | `/projects/{id}/members/{employeeId}` | Add someone, or change their role, allocation or dates: `{"role":"...","allocationPercent":50,"startDate":"2026-11-01","endDate":"2027-03-31"}`. The dates are optional. |
 | DELETE | `/projects/{id}/members/{employeeId}` | Remove someone from the project. |
 | POST / PUT | `/projects/{id}/skills` | Add one required skill or change its minimum level, or replace them all. HR or the project lead. |
 | DELETE | `/projects/{id}/skills/{skillId}` | Remove a required skill. HR or the project lead. |
-| GET | `/projects/{id}/candidates?allocationPercent=` | People who could join, best skill match first. See [Skill levels and matching](#skill-levels-and-matching). |
+| GET | `/projects/{id}/candidates?allocationPercent=&from=&to=` | People who could join over a period, best skill match first, with their leave in that period. See [Skill levels and matching](#skill-levels-and-matching). |
 | GET | `/projects/{id}/history` | Change history, including membership changes and staffing requests. HR or ADMIN. |
 
 ### Staffing requests
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/projects/{id}/staffing-requests` | Project lead: request a change, e.g. `{"employeeId":"...","action":"ASSIGN","role":"...","allocationPercent":50}` or `{"employeeId":"...","action":"REMOVE"}`. |
+| POST | `/projects/{id}/staffing-requests` | Project lead: request a change, e.g. `{"employeeId":"...","action":"ASSIGN","role":"...","allocationPercent":50,"startDate":"2026-11-01"}` (dates optional) or `{"employeeId":"...","action":"REMOVE"}`. |
 | GET | `/projects/{id}/staffing-requests?status=` | The project's requests. Project lead, HR or ADMIN. |
 | POST | `/staffing-requests/{id}/cancel` | Withdraw a pending request. The requester only. |
 | GET | `/staffing-requests?status=PENDING&projectId=` | HR's approval queue, oldest first. HR or ADMIN. |
@@ -465,6 +480,7 @@ Scripts in `src/main/resources/neo4j/migrations` run in order at startup. Each o
 | V0007 | Constraint and indexes for the email outbox. |
 | V0008 | Gives existing skills a level of 3 (intermediate). |
 | V0009 | Constraint and indexes for leave requests. |
+| V0010 | Gives existing project assignments a start date: the day the person joined. |
 
 To change the schema, add a new `V0005__description.cypher` file. Never edit a migration that has
 already been applied.
@@ -482,6 +498,10 @@ access to Aura to run them. They cover:
 - **Services:** reporting and department cycles, termination rules, directory filters, uniqueness.
 - **Projects and offices:** the 100% allocation limit, reopening checks, availability search, and
   how termination handles projects and offices.
+- **Allocation over time:** booking people one after another, the busiest-day check and its message,
+  default and kept dates, current allocation counting only today, reopening against each member's
+  own dates, and staffing requests for later dates. Candidates over a period: bookings before,
+  during and after it, and approved, pending and whole-period leave.
 - **Leave:** requesting and deciding, who may decide (managers at any depth, HR, never yourself),
   overlaps, the annual allowance including pending days and leave over New Year, cancelling before
   and after leave starts, cancelling on termination, and who can see whose leave. Leave emails and

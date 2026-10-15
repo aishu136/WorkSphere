@@ -124,7 +124,7 @@ class StaffingWorkflowTests {
     private StaffingRequestResponse requestAssign(String projectId, String employeeId, int allocation) {
         actAs("lena");
         return staffing.request(projectId, new CreateStaffingRequest(employeeId, StaffingAction.ASSIGN, "Backend dev",
-                allocation), "lena");
+                allocation, null, null), "lena");
     }
 
     private boolean onPayroll(String employeeId) {
@@ -171,7 +171,7 @@ class StaffingWorkflowTests {
 
         // Meanwhile HR books Dev at 50% elsewhere, so 60% more would exceed 100%.
         actAs("hr.user");
-        projects.assign(other, dev, new AssignmentRequest("Dev", 50));
+        projects.assign(other, dev, new AssignmentRequest("Dev", 50, null, null));
 
         assertThatThrownBy(() -> staffing.approve(pending.id(), "hr.user"))
                 .isInstanceOf(ConflictException.class)
@@ -189,11 +189,34 @@ class StaffingWorkflowTests {
     }
 
     @Test
+    void someoneBusyNowCanBeRequestedForLater() {
+        setUp();
+        String other = projects.create(new CreateProjectRequest("OTHER", "Other", null, ProjectStatus.ACTIVE,
+                null, null, null, null)).id();
+        LocalDate releaseDay = LocalDate.of(2030, 3, 31);
+        actAs("hr.user");
+        projects.assign(other, dev, new AssignmentRequest("Dev", 100, LocalDate.now(), releaseDay));
+
+        // Overlapping the current booking is refused; starting the day after it ends is fine.
+        actAs("lena");
+        assertThatThrownBy(() -> staffing.request(payroll, new CreateStaffingRequest(dev, StaffingAction.ASSIGN,
+                "Dev", 50, releaseDay, null), "lena"))
+                .isInstanceOf(ConflictException.class).hasMessageContaining("already 100% allocated");
+        StaffingRequestResponse pending = staffing.request(payroll, new CreateStaffingRequest(dev,
+                StaffingAction.ASSIGN, "Dev", 50, releaseDay.plusDays(1), null), "lena");
+        assertThat(pending.startDate()).isEqualTo(releaseDay.plusDays(1));
+
+        actAs("hr.user");
+        staffing.approve(pending.id(), "hr.user");
+        assertThat(projectQueries.member(payroll, dev).orElseThrow().startDate()).isEqualTo(releaseDay.plusDays(1));
+    }
+
+    @Test
     void invalidRequestsAreRefusedUpFront() {
         setUp();
         String busy = hire("BUSY");
         actAs("hr.user");
-        projects.assign(payroll, busy, new AssignmentRequest("Dev", 90));
+        projects.assign(payroll, busy, new AssignmentRequest("Dev", 90, null, null));
 
         // Over 100%.
         assertThatThrownBy(() -> requestAssign(projects.create(new CreateProjectRequest("X", "X", null,
@@ -202,12 +225,12 @@ class StaffingWorkflowTests {
 
         // ASSIGN without an allocation.
         assertThatThrownBy(() -> staffing.request(payroll,
-                new CreateStaffingRequest(dev, StaffingAction.ASSIGN, null, null), "lena"))
+                new CreateStaffingRequest(dev, StaffingAction.ASSIGN, null, null, null, null), "lena"))
                 .isInstanceOf(IllegalArgumentException.class);
 
         // Removing someone who isn't on the project.
         assertThatThrownBy(() -> staffing.request(payroll,
-                new CreateStaffingRequest(dev, StaffingAction.REMOVE, null, null), "lena"))
+                new CreateStaffingRequest(dev, StaffingAction.REMOVE, null, null, null, null), "lena"))
                 .isInstanceOf(ConflictException.class)
                 .hasMessageContaining("not on this project");
 
@@ -248,11 +271,11 @@ class StaffingWorkflowTests {
     void removalRequestsTakeSomeoneOffWhenApproved() {
         setUp();
         actAs("hr.user");
-        projects.assign(payroll, dev, new AssignmentRequest("Dev", 50));
+        projects.assign(payroll, dev, new AssignmentRequest("Dev", 50, null, null));
 
         actAs("lena");
         StaffingRequestResponse pending = staffing.request(payroll,
-                new CreateStaffingRequest(dev, StaffingAction.REMOVE, null, null), "lena");
+                new CreateStaffingRequest(dev, StaffingAction.REMOVE, null, null, null, null), "lena");
         assertThat(pending.allocationPercent()).isNull();
         assertThat(onPayroll(dev)).isTrue();
 

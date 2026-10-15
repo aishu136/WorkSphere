@@ -574,7 +574,7 @@ class SecurityAndDtoTests {
 
     private static com.example.neo4j.dto.StaffingRequestResponse staffingRequest(String id) {
         return new com.example.neo4j.dto.StaffingRequestResponse(id, null, null,
-                com.example.neo4j.entity.StaffingAction.ASSIGN, "Dev", 50,
+                com.example.neo4j.entity.StaffingAction.ASSIGN, "Dev", 50, null, null,
                 com.example.neo4j.entity.StaffingRequestStatus.PENDING, "mgr", null, null, null, null);
     }
 
@@ -728,17 +728,17 @@ class SecurityAndDtoTests {
 
     @Test
     void anyoneCanSeeCandidatesWithCapacityAndPaging() throws Exception {
-        when(projectService.candidates(eq("p1"), anyInt(), any(Pageable.class))).thenReturn(Page.empty());
+        when(projectService.candidates(eq("p1"), anyInt(), any(), any(), any(Pageable.class))).thenReturn(Page.empty());
 
         mvc.perform(get("/projects/p1/candidates").param("allocationPercent", "50").param("size", "5")
                         .with(jwt().authorities(role("EMPLOYEE"))))
                 .andExpect(status().isOk());
-        verify(projectService).candidates("p1", 50, PageRequest.of(0, 5));
+        verify(projectService).candidates("p1", 50, null, null, PageRequest.of(0, 5));
 
         // Without allocationPercent, anyone with some free capacity counts.
         mvc.perform(get("/projects/p1/candidates").with(jwt().authorities(role("EMPLOYEE"))))
                 .andExpect(status().isOk());
-        verify(projectService).candidates("p1", 1, PageRequest.of(0, 20));
+        verify(projectService).candidates("p1", 1, null, null, PageRequest.of(0, 20));
 
         mvc.perform(get("/projects/p1/candidates").param("allocationPercent", "0")
                         .with(jwt().authorities(role("EMPLOYEE"))))

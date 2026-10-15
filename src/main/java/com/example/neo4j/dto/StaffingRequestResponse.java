@@ -1,6 +1,7 @@
 package com.example.neo4j.dto;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 import com.example.neo4j.entity.StaffingAction;
 import com.example.neo4j.entity.StaffingRequestStatus;
@@ -12,6 +13,8 @@ public record StaffingRequestResponse(
         StaffingAction action,
         String role,
         Integer allocationPercent,
+        LocalDate startDate,
+        LocalDate endDate,
         StaffingRequestStatus status,
         String requestedBy,
         Instant requestedAt,

@@ -38,7 +38,8 @@ import com.example.neo4j.repository.StaffingRequestRepository;
  *
  * - Requests are validated when created, so HR doesn't review requests that could never be applied.
  * - Approval applies the change through ProjectService, so every rule (open project, active
- *   employee, 100% allocation cap) is checked again against the current state.
+ *   employee, 100% allocation cap on every day of the assignment) is checked again against the
+ *   current state.
  * - Nobody can approve their own request.
  * - Every step is recorded in the project's audit history and published as a
  *   StaffingRequestEvent, which triggers email notifications once the transaction commits.
@@ -117,11 +118,10 @@ public class StaffingService {
 			if (employee.getStatus() == EmploymentStatus.TERMINATED) {
 				throw new ConflictException(employee.getName() + " is terminated");
 			}
-			int elsewhere = projectQueries.openAllocationExcluding(employee.getId(), projectId);
-			if (elsewhere + request.allocationPercent() > ProjectService.MAX_ALLOCATION) {
-				throw new ConflictException(employee.getName() + " is already " + elsewhere + "% allocated; adding "
-						+ request.allocationPercent() + "% would exceed " + ProjectService.MAX_ALLOCATION + "%");
-			}
+			// The same dates and per-day check the assignment will get on approval.
+			ProjectService.DateRange dates = projectService.assignmentDates(project,
+					projectQueries.member(projectId, employee.getId()), request.startDate(), request.endDate());
+			projectService.requireCapacity(employee, projectId, request.allocationPercent(), dates);
 		} else if (!onProject) {
 			throw new ConflictException(employee.getName() + " is not on this project");
 		}
@@ -133,6 +133,8 @@ public class StaffingService {
 		if (request.action() == StaffingAction.ASSIGN) {
 			staffingRequest.setRole(trimToNull(request.role()));
 			staffingRequest.setAllocationPercent(request.allocationPercent());
+			staffingRequest.setStartDate(request.startDate());
+			staffingRequest.setEndDate(request.endDate());
 		}
 		staffingRequest.setStatus(StaffingRequestStatus.PENDING);
 		staffingRequest.setRequestedBy(requestedBy);
@@ -174,7 +176,8 @@ public class StaffingService {
 
 		if (request.getAction() == StaffingAction.ASSIGN) {
 			projectService.assign(request.getProjectId(), request.getEmployeeId(),
-					new AssignmentRequest(request.getRole(), request.getAllocationPercent()));
+					new AssignmentRequest(request.getRole(), request.getAllocationPercent(), request.getStartDate(),
+							request.getEndDate()));
 		} else {
 			projectService.unassign(request.getProjectId(), request.getEmployeeId());
 		}
@@ -232,6 +235,8 @@ public class StaffingService {
 		if (request.getAction() == StaffingAction.ASSIGN) {
 			details.put("role", request.getRole());
 			details.put("allocationPercent", request.getAllocationPercent());
+			details.put("startDate", request.getStartDate());
+			details.put("endDate", request.getEndDate());
 		}
 		details.put("requestedBy", request.getRequestedBy());
 		if (reason != null) {

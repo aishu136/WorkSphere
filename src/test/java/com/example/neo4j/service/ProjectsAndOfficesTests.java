@@ -99,7 +99,7 @@ class ProjectsAndOfficesTests {
     }
 
     private void assign(String projectId, String employeeId, int allocation) {
-        projects.assign(projectId, employeeId, new AssignmentRequest("Developer", allocation));
+        projects.assign(projectId, employeeId, new AssignmentRequest("Developer", allocation, null, null));
     }
 
     private int allocationOf(String employeeId) {
@@ -255,7 +255,7 @@ class ProjectsAndOfficesTests {
                 null, null))).isInstanceOf(ConflictException.class);
 
         assign(p, dev, 50);
-        projects.assign(p, dev, new AssignmentRequest("Tech lead", 60));
+        projects.assign(p, dev, new AssignmentRequest("Tech lead", 60, null, null));
         assertThat(projects.members(p, FIRST_PAGE).getContent()).singleElement()
                 .satisfies(m -> {
                     assertThat(m.role()).isEqualTo("Tech lead");

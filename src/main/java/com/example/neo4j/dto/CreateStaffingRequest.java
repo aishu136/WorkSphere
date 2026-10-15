@@ -1,5 +1,7 @@
 package com.example.neo4j.dto;
 
+import java.time.LocalDate;
+
 import com.example.neo4j.entity.StaffingAction;
 
 import jakarta.validation.constraints.Max;
@@ -23,5 +25,10 @@ public record CreateStaffingRequest(
         // Required for ASSIGN.
         @Min(1)
         @Max(100)
-        Integer allocationPercent) {
+        Integer allocationPercent,
+
+        // ASSIGN only. Optional; the same defaults as AssignmentRequest.
+        LocalDate startDate,
+
+        LocalDate endDate) {
 }

@@ -1,8 +1,10 @@
 package com.example.neo4j.controller;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -132,14 +134,18 @@ public class ProjectController {
         return ResponseEntity.ok(service.removeRequiredSkill(id, skillId));
     }
 
-    // Best matches for the project's required skills, among people with at least allocationPercent free.
+    // Best matches for the project's required skills between from and to (default: the project's dates),
+    // among people with at least allocationPercent free on their busiest day and not away the whole time.
     @GetMapping("/projects/{id}/candidates")
     public ResponseEntity<PageResponse<CandidateResponse>> candidates(
             @PathVariable("id") String id,
             @RequestParam(name = "allocationPercent", defaultValue = "1") @Min(1) @Max(100) int allocationPercent,
+            @RequestParam(name = "from", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(name = "to", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @Valid @ParameterObject PageParams paging) {
 
-        return ResponseEntity.ok(PageResponse.of(service.candidates(id, allocationPercent, paging.toPageable())));
+        return ResponseEntity.ok(PageResponse.of(
+                service.candidates(id, allocationPercent, from, to, paging.toPageable())));
     }
 
     // ---- Members --------------------------------------------------------------

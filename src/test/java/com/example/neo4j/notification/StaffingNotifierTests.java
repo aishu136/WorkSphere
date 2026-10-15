@@ -77,7 +77,7 @@ class StaffingNotifierTests {
                 new ProjectSummary("p1", "PAYROLL", "Payroll", ProjectStatus.ACTIVE),
                 new EmployeeSummary("e-dev", employeeName, "Engineer"),
                 action, action == StaffingAction.ASSIGN ? "Backend dev" : null,
-                action == StaffingAction.ASSIGN ? 50 : null, status, "lena",
+                action == StaffingAction.ASSIGN ? 50 : null, null, null, status, "lena",
                 Instant.parse("2026-09-24T10:15:00Z"), decidedBy, null, reason)));
     }
 

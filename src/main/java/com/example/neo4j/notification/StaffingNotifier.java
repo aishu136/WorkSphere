@@ -217,7 +217,16 @@ public class StaffingNotifier {
         return request.action() == StaffingAction.REMOVE
                 ? "Remove " + employeeName + " from the project"
                 : "Add or update " + employeeName + ": " + orDash(request.role()) + ", "
-                        + request.allocationPercent() + "% allocation";
+                        + request.allocationPercent() + "% allocation" + period(request);
+    }
+
+    // Requested dates, if any; without them the project's dates apply.
+    private static String period(StaffingRequestResponse request) {
+        if (request.startDate() == null && request.endDate() == null) {
+            return "";
+        }
+        return (request.startDate() == null ? "" : " from " + request.startDate())
+                + (request.endDate() == null ? "" : " until " + request.endDate());
     }
 
     private static String shortChange(StaffingRequestResponse request, String employeeName) {

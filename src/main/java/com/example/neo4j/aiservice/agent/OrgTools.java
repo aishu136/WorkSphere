@@ -1,5 +1,7 @@
 package com.example.neo4j.aiservice.agent;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -167,17 +169,21 @@ public class OrgTools {
         return projects.projectsOf(employeeId);
     }
 
-    @Tool("Suggest people for a project, best match for its required skills first. Only active people "
-            + "not already on it, with at least one required skill and enough free capacity. Each result has "
-            + "a match percent, free capacity, whether they are in the project's department, and their level "
-            + "in each required skill. Returns the project's required skills too; no results if it has none.")
+    @Tool("Suggest people for a project between two dates (default: the project's dates), best match for its "
+            + "required skills first. Only active people not already on it, with at least one required skill, "
+            + "enough free capacity on their busiest day, and not on leave the whole time. Each result has a "
+            + "match percent, free capacity, approved and pending leave days in the period, availability "
+            + "percent, whether they are in the project's department, and their level in each required skill. "
+            + "Returns the project's required skills too; no results if it has none.")
     public Map<String, Object> findCandidatesForProject(
             @P("Project id (use findProjects to get it)") String projectId,
             @P(value = "Free capacity the person needs, in percent, 1-100. Default 1", required = false)
-            Integer allocationPercent) {
+            Integer allocationPercent,
+            @P(value = "First day of the period, YYYY-MM-DD", required = false) String from,
+            @P(value = "Last day of the period, YYYY-MM-DD", required = false) String to) {
 
         var page = projects.candidates(projectId, allocationPercent == null ? 1 : allocationPercent,
-                PageRequest.of(0, MAX_RESULTS));
+                parseDate(from), parseDate(to), PageRequest.of(0, MAX_RESULTS));
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("requiredSkills", projects.findById(projectId).requiredSkills());
@@ -239,6 +245,17 @@ public class OrgTools {
         brief.put("manager", e.manager() == null ? null : e.manager().name());
         brief.put("allocationPercent", e.allocationPercent());
         return brief;
+    }
+
+    private static LocalDate parseDate(String date) {
+        if (blankToNull(date) == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(date.trim());
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException("Dates must look like 2026-12-31, not '" + date + "'");
+        }
     }
 
     private static EmploymentStatus parseStatus(String status) {

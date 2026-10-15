@@ -39,6 +39,8 @@ class LegacyDataMigrationTests {
                    (java3:Skill {id: 's3', name: ' Java '}),
                    (py:Skill {id: 's4', name: 'Python'}),
                    (c:Company {id: 'c1', name: 'Acme'}),
+                   (pr:Project {id: 'pr1', code: 'OLD-1', name: 'Old project', status: 'ACTIVE'}),
+                   (b)-[:WORKS_ON {since: date('2024-05-01'), allocationPercent: 50, role: 'Dev'}]->(pr),
                    (a)-[:HAS_SKILL]->(java1), (a)-[:HAS_SKILL]->(java2),
                    (b)-[:HAS_SKILL]->(java3), (b)-[:HAS_SKILL]->(py),
                    (a)-[:WORKS_FOR]->(c),
@@ -88,6 +90,13 @@ class LegacyDataMigrationTests {
         // Skills from before levels existed count as intermediate (3).
         assertThat(count("MATCH ()-[r:HAS_SKILL]->() WHERE r.level = 3 RETURN count(r)")).isEqualTo(3);
         assertThat(count("MATCH ()-[r:HAS_SKILL]->() WHERE r.level IS NULL RETURN count(r)")).isZero();
+    }
+
+    @Test
+    void assignmentsWithoutDatesStartWhenThePersonJoined() {
+        assertThat(client.query("MATCH (:Employee {id: 'p2'})-[w:WORKS_ON]->() RETURN w.startDate AS start")
+                .fetchAs(java.time.LocalDate.class).one()).contains(java.time.LocalDate.of(2024, 5, 1));
+        assertThat(count("MATCH ()-[w:WORKS_ON]->() WHERE w.endDate IS NOT NULL RETURN count(w)")).isZero();
     }
 
     @Test

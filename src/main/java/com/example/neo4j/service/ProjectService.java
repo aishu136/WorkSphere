@@ -1,6 +1,7 @@
 package com.example.neo4j.service;
 
 import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -8,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,25 +30,34 @@ import com.example.neo4j.dto.SkillResponse;
 import com.example.neo4j.dto.UpdateProjectRequest;
 import com.example.neo4j.entity.Employee;
 import com.example.neo4j.entity.EmploymentStatus;
+import com.example.neo4j.entity.LeaveStatus;
 import com.example.neo4j.entity.Project;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.repository.DepartmentRepository;
 import com.example.neo4j.repository.EmployeeRepository;
+import com.example.neo4j.repository.LeaveQueries.Period;
 import com.example.neo4j.repository.ProjectQueries;
+import com.example.neo4j.repository.ProjectQueries.Booking;
+import com.example.neo4j.repository.ProjectQueries.MemberBooking;
 import com.example.neo4j.repository.ProjectRepository;
 import com.example.neo4j.repository.SkillRepository;
+import com.example.neo4j.service.Allocations.Peak;
 
 /*
- * Projects and staffing. The key rule: an employee's allocation across open projects
- * (PLANNED, ACTIVE, ON_HOLD) can never exceed 100%. It is checked when someone is assigned
- * or their allocation changes, and when a finished project is reopened.
+ * Projects and staffing. The key rule: on any day, an employee's allocation across open projects
+ * (PLANNED, ACTIVE, ON_HOLD) can never exceed 100%. Assignments have dates, so someone fully
+ * booked until March can be booked from April. It is checked when someone is assigned or their
+ * allocation or dates change, and when a finished project is reopened.
  */
 @Service
 public class ProjectService {
 
 	static final int MAX_ALLOCATION = 100;
+
+	// Candidate window when the project has no end date.
+	static final int DEFAULT_WINDOW_DAYS = 90;
 
 	private final ProjectRepository projectRepository;
 	private final ProjectQueries projectQueries;
@@ -93,10 +104,11 @@ public class ProjectService {
 		}
 
 		List<EmployeeAssignmentResponse> assignments = projectQueries.assignmentsOf(employeeId);
-		int allocation = assignments.stream()
+		LocalDate today = LocalDate.now();
+		int allocation = Allocations.loadOn(assignments.stream()
 				.filter(a -> a.project().status().isOpen())
-				.mapToInt(EmployeeAssignmentResponse::allocationPercent)
-				.sum();
+				.map(a -> new Booking(a.startDate(), a.endDate(), a.allocationPercent()))
+				.toList(), today);
 
 		return new EmployeeProjectsResponse(allocation, assignments);
 	}
@@ -179,7 +191,15 @@ public class ProjectService {
 
 		// Reopening a finished project makes its members' allocation count again.
 		if (status.isOpen() && !previous.isOpen()) {
-			List<String> overAllocated = projectQueries.membersOverAllocatedIfReopened(id);
+			List<String> overAllocated = projectQueries.memberBookings(id).stream()
+					.filter(member -> {
+						Booking booking = member.booking();
+						Peak elsewhere = Allocations.peak(projectQueries.bookingsExcluding(member.employeeId(), id),
+								booking.startDate(), booking.endDate());
+						return elsewhere.percent() + booking.allocationPercent() > MAX_ALLOCATION;
+					})
+					.map(MemberBooking::name)
+					.toList();
 			if (!overAllocated.isEmpty()) {
 				throw new ConflictException("Reopening would put these members over 100% allocation: "
 						+ String.join(", ", overAllocated));
@@ -317,19 +337,71 @@ public class ProjectService {
 	}
 
 	/**
-	 * People who could join the project, best match for its required skills first. Only active
-	 * employees who aren't on the project yet, have at least one required skill and have at least
-	 * allocationPercent free capacity. Empty when the project requires no skills.
+	 * People who could join the project between from and to, best match first. Only active
+	 * employees who aren't on the project yet, have at least one required skill, have at least
+	 * allocationPercent free on their busiest day in the window, and aren't on approved leave for
+	 * all of it. Empty when the project requires no skills.
+	 *
+	 * Order: skill match, then people in the owning department, then how much of the window they
+	 * are not on leave, then free capacity.
+	 *
+	 * The window defaults to the project's dates, starting no earlier than today, or
+	 * DEFAULT_WINDOW_DAYS when the project has no end date.
 	 */
 	@Transactional(readOnly = true)
-	public Page<CandidateResponse> candidates(String id, int allocationPercent, Pageable pageable) {
+	public Page<CandidateResponse> candidates(String id, int allocationPercent, LocalDate from, LocalDate to,
+			Pageable pageable) {
 
 		Project project = requireProject(id);
 		if (!project.getStatus().isOpen()) {
 			throw new ConflictException("Project is " + project.getStatus() + "; people can only join open projects");
 		}
 
-		return projectQueries.candidates(id, allocationPercent, pageable);
+		LocalDate start = from != null ? from : laterOf(LocalDate.now(), project.getStartDate());
+		LocalDate end = to != null ? to
+				: project.getEndDate() != null && !project.getEndDate().isBefore(start) ? project.getEndDate()
+				: start.plusDays(DEFAULT_WINDOW_DAYS - 1);
+		if (end.isBefore(start)) {
+			throw new IllegalArgumentException("to cannot be before from");
+		}
+		int windowDays = WorkingDays.between(start, end);
+
+		record Ranked(CandidateResponse candidate, double score) {
+		}
+
+		List<Ranked> ranked = projectQueries.candidates(id, start, end).stream()
+				.map(row -> {
+					int free = MAX_ALLOCATION - Allocations.peak(row.bookings(), start, end).percent();
+					int leave = leaveDays(row.leave(), LeaveStatus.APPROVED, start, end);
+					int pending = leaveDays(row.leave(), LeaveStatus.PENDING, start, end);
+					int availability = windowDays == 0 ? 100
+							: (int) Math.round(100.0 * (windowDays - leave) / windowDays);
+					return new Ranked(new CandidateResponse(row.employee(), (int) Math.round(row.score() * 100),
+							free, leave, pending, availability, row.inOwningDepartment(), row.skills()), row.score());
+				})
+				.filter(r -> r.candidate().freeCapacityPercent() >= allocationPercent
+						&& r.candidate().availabilityPercent() > 0)
+				.sorted(Comparator.comparingDouble(Ranked::score).reversed()
+						.thenComparing(r -> !r.candidate().inOwningDepartment())
+						.thenComparing(r -> -r.candidate().availabilityPercent())
+						.thenComparing(r -> -r.candidate().freeCapacityPercent())
+						.thenComparing(r -> r.candidate().employee().name())
+						.thenComparing(r -> r.candidate().employee().id()))
+				.toList();
+
+		List<CandidateResponse> page = ranked.stream()
+				.skip(pageable.getOffset())
+				.limit(pageable.getPageSize())
+				.map(Ranked::candidate)
+				.toList();
+		return new PageImpl<>(page, pageable, ranked.size());
+	}
+
+	private static int leaveDays(List<Period> leave, LeaveStatus status, LocalDate from, LocalDate to) {
+		return leave.stream()
+				.filter(period -> period.status() == status)
+				.mapToInt(period -> WorkingDays.overlap(period.startDate(), period.endDate(), from, to))
+				.sum();
 	}
 
 	// ---- Members --------------------------------------------------------------
@@ -344,28 +416,30 @@ public class ProjectService {
 		}
 		Employee employee = requireActiveEmployee(employeeId, "A terminated employee cannot join a project");
 
+		Optional<ProjectMemberResponse> previous = projectQueries.member(id, employeeId);
+		DateRange dates = assignmentDates(project, previous, request.startDate(), request.endDate());
+
 		int allocation = request.allocationPercent();
-		int elsewhere = projectQueries.openAllocationExcluding(employeeId, id);
-		if (elsewhere + allocation > MAX_ALLOCATION) {
-			throw new ConflictException(employee.getName() + " is already " + elsewhere
-					+ "% allocated; adding " + allocation + "% would exceed " + MAX_ALLOCATION + "%");
-		}
+		requireCapacity(employee, id, allocation, dates);
 
 		String role = trimToNull(request.role());
-		Optional<ProjectMemberResponse> previous = projectQueries.member(id, employeeId);
 
-		projectQueries.assign(employeeId, id, role, allocation);
+		projectQueries.assign(employeeId, id, role, allocation, dates.start(), dates.end());
 
 		if (previous.isEmpty()) {
 			Map<String, Object> details = new LinkedHashMap<>();
 			details.put("employeeId", employeeId);
 			details.put("role", role);
 			details.put("allocationPercent", allocation);
+			details.put("startDate", dates.start());
+			details.put("endDate", dates.end());
 			audit(AuditAction.PROJECT_MEMBER_ADDED, id, details);
 		} else {
 			Changes changes = new Changes()
 					.track("role", previous.get().role(), role)
-					.track("allocationPercent", previous.get().allocationPercent(), allocation);
+					.track("allocationPercent", previous.get().allocationPercent(), allocation)
+					.track("startDate", previous.get().startDate(), dates.start())
+					.track("endDate", previous.get().endDate(), dates.end());
 			if (!changes.isEmpty()) {
 				Map<String, Object> details = new LinkedHashMap<>();
 				details.put("employeeId", employeeId);
@@ -393,6 +467,48 @@ public class ProjectService {
 		details.put("role", previous.get().role());
 		details.put("allocationPercent", previous.get().allocationPercent());
 		audit(AuditAction.PROJECT_MEMBER_REMOVED, id, details);
+	}
+
+	// ---- Allocation over time ---------------------------------------------------
+
+	/** An assignment's dates, both inclusive; a null end means open-ended. */
+	record DateRange(LocalDate start, LocalDate end) {
+	}
+
+	/**
+	 * The dates an assignment gets. A requested date wins; otherwise someone already on the
+	 * project keeps their current date, and someone new gets the project's dates, starting no
+	 * earlier than today.
+	 */
+	DateRange assignmentDates(Project project, Optional<ProjectMemberResponse> current, LocalDate requestedStart,
+			LocalDate requestedEnd) {
+
+		LocalDate start = requestedStart != null ? requestedStart
+				: current.map(ProjectMemberResponse::startDate)
+						.orElseGet(() -> laterOf(LocalDate.now(), project.getStartDate()));
+		LocalDate end = requestedEnd != null ? requestedEnd
+				: current.isPresent() ? current.get().endDate() : project.getEndDate();
+
+		if (end != null && end.isBefore(start)) {
+			throw new IllegalArgumentException("The assignment would end (" + end + ") before it starts (" + start
+					+ "); give a startDate and endDate");
+		}
+		return new DateRange(start, end);
+	}
+
+	/** On no day of the assignment may the employee's open projects add up to more than 100%. */
+	void requireCapacity(Employee employee, String projectId, int allocation, DateRange dates) {
+		Peak elsewhere = Allocations.peak(projectQueries.bookingsExcluding(employee.getId(), projectId),
+				dates.start(), dates.end());
+		if (elsewhere.percent() + allocation > MAX_ALLOCATION) {
+			throw new ConflictException(employee.getName() + " is already " + elsewhere.percent()
+					+ "% allocated on " + elsewhere.day() + "; adding " + allocation + "% would exceed "
+					+ MAX_ALLOCATION + "%");
+		}
+	}
+
+	private static LocalDate laterOf(LocalDate a, LocalDate b) {
+		return b != null && b.isAfter(a) ? b : a;
 	}
 
 	// ---- Helpers --------------------------------------------------------------

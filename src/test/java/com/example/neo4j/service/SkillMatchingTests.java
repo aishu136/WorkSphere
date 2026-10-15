@@ -35,11 +35,15 @@ import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.SkillRequest;
 import com.example.neo4j.dto.SkillResponse;
 import com.example.neo4j.entity.EmploymentStatus;
+import com.example.neo4j.entity.LeaveRequest;
+import com.example.neo4j.entity.LeaveStatus;
+import com.example.neo4j.entity.LeaveType;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.repository.DepartmentQueries;
 import com.example.neo4j.repository.EmployeeQueries;
 import com.example.neo4j.repository.LeaveQueries;
+import com.example.neo4j.repository.LeaveRequestRepository;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.support.EmbeddedNeo4j;
 
@@ -78,6 +82,9 @@ class SkillMatchingTests {
 
     @Autowired
     AuditLog auditLog;
+
+    @Autowired
+    LeaveRequestRepository leaveRequests;
 
     private static final PageRequest FIRST_PAGE = PageRequest.of(0, 20);
 
@@ -200,7 +207,7 @@ class SkillMatchingTests {
         String insider = hire("IN", "Insider");
         skills(insider, skill("Java", 4), skill("Kafka", 3));
         employees.assignDepartment(insider, platform);
-        projects.assign(other, insider, new AssignmentRequest("Dev", 50));
+        projects.assign(other, insider, new AssignmentRequest("Dev", 50, null, null));
 
         // Exceeds both levels, outside the department, fully free.
         String expert = hire("EX", "Expert");
@@ -214,17 +221,17 @@ class SkillMatchingTests {
         // Left out: fully booked, already on the project, on leave, no required skill.
         String busy = hire("BU", "Busy");
         skills(busy, skill("Java", 5), skill("Kafka", 5));
-        projects.assign(other, busy, new AssignmentRequest("Dev", 100));
+        projects.assign(other, busy, new AssignmentRequest("Dev", 100, null, null));
         String member = hire("ME", "Member");
         skills(member, skill("Java", 5));
-        projects.assign(payroll, member, new AssignmentRequest("Dev", 20));
+        projects.assign(payroll, member, new AssignmentRequest("Dev", 20, null, null));
         String away = hire("AW", "Away");
         skills(away, skill("Java", 5));
         employees.changeStatus(away, EmploymentStatus.ON_LEAVE);
         String unrelated = hire("UN", "Unrelated");
         skills(unrelated, skill("Python", 5));
 
-        Page<CandidateResponse> page = projects.candidates(payroll, 1, FIRST_PAGE);
+        Page<CandidateResponse> page = projects.candidates(payroll, 1, null, null, FIRST_PAGE);
         assertThat(page.getContent()).extracting(c -> c.employee().name())
                 .containsExactly("Insider", "Expert", "Partial");
         assertThat(page.getTotalElements()).isEqualTo(3);
@@ -242,11 +249,11 @@ class SkillMatchingTests {
                 new SkillMatch("Kafka", 3, null, false));
 
         // Needing 60% free leaves out the half-booked insider.
-        assertThat(projects.candidates(payroll, 60, FIRST_PAGE).getContent()).extracting(c -> c.employee().name())
+        assertThat(projects.candidates(payroll, 60, null, null, FIRST_PAGE).getContent()).extracting(c -> c.employee().name())
                 .containsExactly("Expert", "Partial");
 
         // Paging keeps the order.
-        assertThat(projects.candidates(payroll, 1, PageRequest.of(1, 2)).getContent())
+        assertThat(projects.candidates(payroll, 1, null, null, PageRequest.of(1, 2)).getContent())
                 .extracting(c -> c.employee().name()).containsExactly("Partial");
     }
 
@@ -256,11 +263,74 @@ class SkillMatchingTests {
         skills(dev, skill("Java", 4));
 
         String noSkills = project("EMPTY", ProjectStatus.PLANNED, null);
-        assertThat(projects.candidates(noSkills, 1, FIRST_PAGE).getContent()).isEmpty();
+        assertThat(projects.candidates(noSkills, 1, null, null, FIRST_PAGE).getContent()).isEmpty();
 
         String done = project("DONE", ProjectStatus.COMPLETED, null);
         projects.replaceRequiredSkills(done, List.of(skill("Java", 3)));
-        assertThatThrownBy(() -> projects.candidates(done, 1, FIRST_PAGE)).isInstanceOf(ConflictException.class);
+        assertThatThrownBy(() -> projects.candidates(done, 1, null, null, FIRST_PAGE)).isInstanceOf(ConflictException.class);
+    }
+
+    @Test
+    void candidatesAreCheckedOverTheProjectsDatesIncludingLeave() {
+        // Four weeks in March 2030: 20 working days. 4 March is a Monday.
+        LocalDate start = LocalDate.of(2030, 3, 4);
+        LocalDate end = LocalDate.of(2030, 3, 29);
+        String payroll = projects.create(new CreateProjectRequest("PAYROLL", "Payroll", null, ProjectStatus.ACTIVE,
+                start, end, null, null)).id();
+        projects.replaceRequiredSkills(payroll, List.of(skill("Java", 3)));
+        String other = project("OTHER", ProjectStatus.ACTIVE, null);
+
+        // Fully booked from the third week: no capacity during the project.
+        String bookedLater = hire("BL", "Booked Later");
+        skills(bookedLater, skill("Java", 4));
+        projects.assign(other, bookedLater, new AssignmentRequest("Dev", 100, start.plusWeeks(2), null));
+
+        // Fully booked until just before the project: free for all of it.
+        String bookedBefore = hire("BB", "Booked Before");
+        skills(bookedBefore, skill("Java", 4));
+        projects.assign(other, bookedBefore, new AssignmentRequest("Dev", 100, start.minusMonths(2), start.minusDays(3)));
+
+        // Away the first two weeks (10 of 20 days), away all of it, and a week waiting for approval.
+        String halfAway = hire("HA", "Half Away");
+        skills(halfAway, skill("Java", 4));
+        leave(halfAway, LeaveStatus.APPROVED, start, start.plusDays(11));
+        String allAway = hire("AA", "All Away");
+        skills(allAway, skill("Java", 4));
+        leave(allAway, LeaveStatus.APPROVED, start.minusDays(7), end.plusDays(7));
+        String maybeAway = hire("MA", "Maybe Away");
+        skills(maybeAway, skill("Java", 4));
+        leave(maybeAway, LeaveStatus.PENDING, start, start.plusDays(4));
+
+        List<CandidateResponse> candidates = projects.candidates(payroll, 1, null, null, FIRST_PAGE).getContent();
+        assertThat(candidates).extracting(c -> c.employee().name())
+                .containsExactly("Booked Before", "Maybe Away", "Half Away");
+
+        CandidateResponse maybe = candidates.get(1);
+        assertThat(maybe.pendingLeaveDays()).isEqualTo(5);
+        assertThat(maybe.availabilityPercent()).isEqualTo(100);
+        CandidateResponse half = candidates.get(2);
+        assertThat(half.leaveDays()).isEqualTo(10);
+        assertThat(half.availabilityPercent()).isEqualTo(50);
+        assertThat(half.freeCapacityPercent()).isEqualTo(100);
+
+        // Looking only at the first two weeks, the person booked later is free, and Half Away is away.
+        assertThat(projects.candidates(payroll, 1, start, start.plusDays(11), FIRST_PAGE).getContent())
+                .extracting(c -> c.employee().name())
+                .containsExactly("Booked Before", "Booked Later", "Maybe Away");
+
+        assertThatThrownBy(() -> projects.candidates(payroll, 1, end, start, FIRST_PAGE))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private void leave(String employeeId, LeaveStatus status, LocalDate start, LocalDate end) {
+        LeaveRequest request = new LeaveRequest();
+        request.setEmployeeId(employeeId);
+        request.setType(LeaveType.ANNUAL);
+        request.setStartDate(start);
+        request.setEndDate(end);
+        request.setStatus(status);
+        request.setRequestedBy("someone");
+        leaveRequests.save(request);
     }
 
     private static List<String> names(Page<EmployeeResponse> page) {

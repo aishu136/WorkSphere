@@ -106,6 +106,8 @@ public class StaffingQueries {
                 StaffingAction.valueOf(text(r.get("action"))),
                 text(r.get("role")),
                 r.get("allocationPercent").isNull() ? null : r.get("allocationPercent").asInt(),
+                EmployeeQueries.date(r.get("startDate")),
+                EmployeeQueries.date(r.get("endDate")),
                 StaffingRequestStatus.valueOf(text(r.get("status"))),
                 text(r.get("requestedBy")),
                 instant(r.get("requestedAt")),

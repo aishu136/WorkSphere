@@ -1,6 +1,7 @@
 package com.example.neo4j.entity;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 import org.springframework.data.annotation.Version;
 import org.springframework.data.neo4j.core.schema.GeneratedValue;
@@ -40,6 +41,11 @@ public class StaffingRequest {
     private String role;
 
     private Integer allocationPercent;
+
+    // As requested; null means the defaults (see AssignmentRequest).
+    private LocalDate startDate;
+
+    private LocalDate endDate;
 
     private StaffingRequestStatus status = StaffingRequestStatus.PENDING;
 

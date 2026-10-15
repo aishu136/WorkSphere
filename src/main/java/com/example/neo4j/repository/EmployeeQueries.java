@@ -39,9 +39,12 @@ import com.example.neo4j.entity.Skill;
 @Repository
 public class EmployeeQueries {
 
-    // Total allocation of employee e across open projects (finished projects don't count).
+    // Employee e's allocation today across open projects (finished projects, and assignments that
+    // haven't started or have ended, don't count). Queries using it bind $today.
     static final String OPEN_ALLOCATION = "reduce(total = 0, a IN [(e)-[w:WORKS_ON]->(p:Project) "
-            + "WHERE p.status IN " + ProjectStatus.OPEN_CYPHER_LIST + " | w.allocationPercent] | total + a)";
+            + "WHERE p.status IN " + ProjectStatus.OPEN_CYPHER_LIST
+            + " AND w.startDate <= $today AND (w.endDate IS NULL OR w.endDate >= $today)"
+            + " | w.allocationPercent] | total + a)";
 
     // Pattern comprehensions fetch related nodes without multiplying rows.
     private static final String EMPLOYEE_PROJECTION = """
@@ -71,7 +74,7 @@ public class EmployeeQueries {
 
     public Optional<EmployeeResponse> findById(String id) {
         return client.query("MATCH (e:Employee {id: $id}) " + EMPLOYEE_PROJECTION)
-                .bind(id).to("id")
+                .bindAll(Map.of("id", id, "today", LocalDate.now()))
                 .fetchAs(EmployeeResponse.class)
                 .mappedBy((types, record) -> toResponse(record))
                 .one();
@@ -326,8 +329,12 @@ public class EmployeeQueries {
 
     // ---- Helpers ----------------------------------------------------------
 
-    private <T> Page<T> page(String match, Map<String, Object> params, Pageable pageable, String projection,
+    private <T> Page<T> page(String match, Map<String, Object> matchParams, Pageable pageable, String projection,
                              Class<T> type, Function<Record, T> mapper) {
+
+        // For OPEN_ALLOCATION, in the match (directory search) or the projection.
+        Map<String, Object> params = new HashMap<>(matchParams);
+        params.put("today", LocalDate.now());
 
         long total = client.query(match + " RETURN count(DISTINCT e) AS total")
                 .bindAll(params)

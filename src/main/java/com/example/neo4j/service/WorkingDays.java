@@ -22,9 +22,12 @@ final class WorkingDays {
 
     // The working days of start..end that fall in the given calendar year.
     static int inYear(int year, LocalDate start, LocalDate end) {
-        LocalDate from = max(start, LocalDate.of(year, 1, 1));
-        LocalDate to = min(end, LocalDate.of(year, 12, 31));
-        return between(from, to);
+        return overlap(start, end, LocalDate.of(year, 1, 1), LocalDate.of(year, 12, 31));
+    }
+
+    // The working days of start..end that fall between from and to (all inclusive).
+    static int overlap(LocalDate start, LocalDate end, LocalDate from, LocalDate to) {
+        return between(max(start, from), min(end, to));
     }
 
     private static LocalDate max(LocalDate a, LocalDate b) {
