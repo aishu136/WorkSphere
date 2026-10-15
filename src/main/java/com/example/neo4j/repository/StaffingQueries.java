@@ -115,7 +115,7 @@ public class StaffingQueries {
     }
 
     // Written by Spring Data Neo4j from an Instant; accept any temporal form it may be stored in.
-    private static Instant instant(Value value) {
+    static Instant instant(Value value) {
         if (value == null || value.isNull()) {
             return null;
         }

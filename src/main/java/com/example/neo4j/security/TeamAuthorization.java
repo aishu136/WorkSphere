@@ -50,6 +50,12 @@ public class TeamAuthorization {
                 employeeQueries.isInTeamOf(username, variable(context, employeeVariable), false));
     }
 
+    /** HR/ADMIN, the employee named by the path variable themselves, or a manager above them. */
+    public AuthorizationManager<RequestAuthorizationContext> hrOrSelfOrManagerOf(String employeeVariable) {
+        return (authentication, context) -> decide(authentication, context, username ->
+                employeeQueries.isInTeamOf(username, variable(context, employeeVariable), true));
+    }
+
     /**
      * HR/ADMIN, or a manager moving one of their reports to a new manager inside their own team
      * (themselves or someone below them), so nobody can be moved out of, or into, another team.

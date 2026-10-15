@@ -39,6 +39,7 @@ import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.repository.DepartmentQueries;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.LeaveQueries;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.support.EmbeddedNeo4j;
 
@@ -51,7 +52,7 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
 @DataNeo4jTest
 @ImportAutoConfiguration(MigrationsAutoConfiguration.class)
 @Import({EmployeeService.class, DepartmentService.class, ProjectService.class,
-        EmployeeQueries.class, DepartmentQueries.class, ProjectQueries.class, AuditLog.class})
+        EmployeeQueries.class, LeaveQueries.class, DepartmentQueries.class, ProjectQueries.class, AuditLog.class})
 class SkillMatchingTests {
 
     private static final Neo4j neo4j = EmbeddedNeo4j.start();

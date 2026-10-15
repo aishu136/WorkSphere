@@ -1,5 +1,6 @@
 package com.example.neo4j.service;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,6 +38,7 @@ import com.example.neo4j.repository.CompanyRepository;
 import com.example.neo4j.repository.DepartmentRepository;
 import com.example.neo4j.repository.EmployeeQueries;
 import com.example.neo4j.repository.EmployeeRepository;
+import com.example.neo4j.repository.LeaveQueries;
 import com.example.neo4j.repository.OfficeRepository;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.repository.SkillRepository;
@@ -59,13 +61,14 @@ public class EmployeeService {
 	private final CompanyRepository companyRepository;
 	private final OfficeRepository officeRepository;
 	private final ProjectQueries projectQueries;
+	private final LeaveQueries leaveQueries;
 	private final AuditLog auditLog;
 	private final ApplicationEventPublisher events;
 
 	public EmployeeService(EmployeeRepository employeeRepository, EmployeeQueries employeeQueries,
 			DepartmentRepository departmentRepository, SkillRepository skillRepository,
 			CompanyRepository companyRepository, OfficeRepository officeRepository, ProjectQueries projectQueries,
-			AuditLog auditLog, ApplicationEventPublisher events) {
+			LeaveQueries leaveQueries, AuditLog auditLog, ApplicationEventPublisher events) {
 		this.employeeRepository = employeeRepository;
 		this.employeeQueries = employeeQueries;
 		this.departmentRepository = departmentRepository;
@@ -73,6 +76,7 @@ public class EmployeeService {
 		this.companyRepository = companyRepository;
 		this.officeRepository = officeRepository;
 		this.projectQueries = projectQueries;
+		this.leaveQueries = leaveQueries;
 		this.auditLog = auditLog;
 		this.events = events;
 	}
@@ -196,7 +200,8 @@ public class EmployeeService {
 	/**
 	 * Offboards an employee. The record is kept (status TERMINATED) rather than deleted;
 	 * current reporting line, department, office and open project assignments are removed
-	 * (finished projects are kept as history) and their login is disabled.
+	 * (finished projects are kept as history) and their login is disabled. Pending leave, and
+	 * approved leave that hasn't started, is cancelled.
 	 */
 	@Transactional
 	public EmployeeResponse terminate(String id) {
@@ -226,6 +231,8 @@ public class EmployeeService {
 		employeeQueries.clearDepartment(id);
 		employeeQueries.clearOffice(id);
 		List<String> removedFromProjects = projectQueries.removeOpenAssignments(id);
+		List<String> cancelledLeave = leaveQueries.cancelOpenRequests(id, CurrentUser.username(), Instant.now(),
+				LocalDate.now());
 		employeeQueries.disableLinkedLogin(id);
 
 		// These links are removed, so record what they were.
@@ -236,6 +243,7 @@ public class EmployeeService {
 		details.put("previousDepartmentId", departmentId(before));
 		details.put("previousOfficeId", before.office() == null ? null : before.office().id());
 		details.put("removedFromProjectIds", removedFromProjects);
+		details.put("cancelledLeaveRequestIds", cancelledLeave);
 		audit(AuditAction.EMPLOYEE_TERMINATED, id, details);
 
 		log.info("Terminated employee {}", id);

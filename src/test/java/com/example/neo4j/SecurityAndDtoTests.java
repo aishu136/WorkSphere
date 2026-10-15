@@ -46,20 +46,25 @@ import com.example.neo4j.audit.AuditTargetType;
 import com.example.neo4j.controller.AuthController;
 import com.example.neo4j.controller.DepartmentController;
 import com.example.neo4j.controller.EmployeeController;
+import com.example.neo4j.controller.LeaveController;
 import com.example.neo4j.controller.OfficeController;
 import com.example.neo4j.controller.ProjectController;
 import com.example.neo4j.controller.StaffingRequestController;
-import com.example.neo4j.outbox.OutboxController;
-import com.example.neo4j.outbox.OutboxService;
 import com.example.neo4j.controller.UserController;
 import com.example.neo4j.dto.CreateEmployeeRequest;
+import com.example.neo4j.dto.CreateLeaveRequest;
 import com.example.neo4j.dto.DepartmentSummary;
 import com.example.neo4j.dto.EmployeeFilter;
-import com.example.neo4j.dto.SkillRequest;
 import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeSummary;
+import com.example.neo4j.dto.LeaveFilter;
+import com.example.neo4j.dto.SkillRequest;
 import com.example.neo4j.entity.EmploymentStatus;
+import com.example.neo4j.entity.LeaveStatus;
+import com.example.neo4j.entity.LeaveType;
 import com.example.neo4j.exception.ConflictException;
+import com.example.neo4j.outbox.OutboxController;
+import com.example.neo4j.outbox.OutboxService;
 import com.example.neo4j.repository.EmployeeQueries;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.security.SecurityConfig;
@@ -67,6 +72,7 @@ import com.example.neo4j.security.TeamAuthorization;
 import com.example.neo4j.security.TokenService;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
+import com.example.neo4j.service.LeaveService;
 import com.example.neo4j.service.OfficeService;
 import com.example.neo4j.service.ProjectService;
 import com.example.neo4j.service.StaffingService;
@@ -75,7 +81,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 @WebMvcTest(controllers = {EmployeeController.class, DepartmentController.class, AuthController.class,
         UserController.class, AuditController.class, OfficeController.class, ProjectController.class,
-        StaffingRequestController.class, OutboxController.class})
+        StaffingRequestController.class, OutboxController.class, LeaveController.class})
 @Import({SecurityConfig.class, TokenService.class, TeamAuthorization.class})
 @TestPropertySource(properties = {
         "app.jwt.secret=test-secret-that-is-at-least-32-bytes-long",
@@ -106,6 +112,9 @@ class SecurityAndDtoTests {
 
     @MockitoBean
     StaffingService staffingService;
+
+    @MockitoBean
+    LeaveService leaveService;
 
     @MockitoBean
     OutboxService outboxService;
@@ -734,5 +743,56 @@ class SecurityAndDtoTests {
         mvc.perform(get("/projects/p1/candidates").param("allocationPercent", "0")
                         .with(jwt().authorities(role("EMPLOYEE"))))
                 .andExpect(status().isBadRequest());
+    }
+
+    // ---- Leave ------------------------------------------------------------------
+
+    @Test
+    void anyEmployeeCanRequestLeaveWithValidDates() throws Exception {
+        mvc.perform(post("/leave-requests").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"type\":\"ANNUAL\",\"startDate\":\"2026-12-21\",\"endDate\":\"2026-12-24\"}"))
+                .andExpect(status().isCreated());
+        verify(leaveService).request(new CreateLeaveRequest(LeaveType.ANNUAL, LocalDate.of(2026, 12, 21),
+                LocalDate.of(2026, 12, 24), null), "mgr");
+
+        mvc.perform(post("/leave-requests").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"type\":\"ANNUAL\",\"startDate\":\"2026-12-21\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/leave-requests").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"type\":\"HOLIDAY\",\"startDate\":\"2026-12-21\",\"endDate\":\"2026-12-21\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/leave-requests/r1/reject").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void onlyHrSeesEveryonesLeave() throws Exception {
+        when(leaveService.search(any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(leaveService.mine(any(), any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(leaveService.team(any(), any(), any(Pageable.class))).thenReturn(Page.empty());
+
+        mvc.perform(get("/leave-requests").with(manager())).andExpect(status().isForbidden());
+        mvc.perform(get("/leave-requests").with(jwt().authorities(role("HR")))).andExpect(status().isOk());
+        mvc.perform(get("/leave-requests/mine").with(manager())).andExpect(status().isOk());
+
+        mvc.perform(get("/leave-requests/team").with(manager())
+                        .param("status", "PENDING").param("from", "2026-12-01").param("to", "2026-12-31"))
+                .andExpect(status().isOk());
+        verify(leaveService).team("mgr", new LeaveFilter(null, LeaveStatus.PENDING, LocalDate.of(2026, 12, 1),
+                LocalDate.of(2026, 12, 31)), PageRequest.of(0, 20));
+    }
+
+    @Test
+    void leaveBalanceIsForTheEmployeeTheirManagersAndHr() throws Exception {
+        when(employeeQueries.isInTeamOf("mgr", "report", true)).thenReturn(true);
+
+        mvc.perform(get("/employees/report/leave-balance").with(manager()).param("year", "2026"))
+                .andExpect(status().isOk());
+        verify(leaveService).balance("report", 2026);
+
+        mvc.perform(get("/employees/stranger/leave-balance").with(manager())).andExpect(status().isForbidden());
+        mvc.perform(get("/employees/stranger/leave-balance").with(jwt().authorities(role("HR"))))
+                .andExpect(status().isOk());
     }
 }

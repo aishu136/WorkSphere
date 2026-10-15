@@ -35,6 +35,7 @@ import com.example.neo4j.outbox.OutboxEmailRepository;
 import com.example.neo4j.outbox.OutboxService;
 import com.example.neo4j.repository.AppUserRepository;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.LeaveQueries;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.service.EmployeeService;
 import com.example.neo4j.support.EmbeddedNeo4j;
@@ -48,7 +49,7 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
 @DataNeo4jTest
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 @ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({EmployeeService.class, EmployeeQueries.class, ProjectQueries.class, AuditLog.class,
+@Import({EmployeeService.class, EmployeeQueries.class, LeaveQueries.class, ProjectQueries.class, AuditLog.class,
         EmployeeChangeNotifier.class, OutboxService.class})
 @TestPropertySource(properties = "app.notifications.hr-email=hr@example.com")
 class ManagerChangeNotificationTests {

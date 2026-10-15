@@ -34,6 +34,7 @@ import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.repository.CompanyRepository;
 import com.example.neo4j.repository.DepartmentQueries;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.LeaveQueries;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.support.EmbeddedNeo4j;
 
@@ -45,7 +46,7 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
  */
 @DataNeo4jTest
 @ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({EmployeeService.class, DepartmentService.class, EmployeeQueries.class, DepartmentQueries.class,
+@Import({EmployeeService.class, DepartmentService.class, EmployeeQueries.class, LeaveQueries.class, DepartmentQueries.class,
         ProjectQueries.class, AuditLog.class})
 class OrgStructureTests {
 

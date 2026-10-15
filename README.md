@@ -14,7 +14,12 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
   rejects changes that would create a loop.
 - **Employee lifecycle.** Create, update and put on leave. Terminating an employee keeps their record,
   removes their reporting, department and office links and their open project assignments, and
-  disables their login. Finished project assignments are kept as history.
+  disables their login. Finished project assignments are kept as history. Pending leave, and approved
+  leave that hasn't started, is cancelled.
+- **Leave management.** Employees request annual, sick, unpaid or other leave. A manager above them in
+  the org chart, or HR, approves or rejects it. Annual leave is checked against a yearly allowance,
+  overlapping requests are refused, and managers can see who in their team is away. See
+  [Leave](#leave).
 - **Directory search.** Filter by name prefix, status, department, skill, company, office and free
   capacity. All list endpoints are paginated.
 - **Offices.** Each employee can be placed in one office. Offices can be searched by name or city.
@@ -98,6 +103,49 @@ Levels are 1 beginner, 2 basic, 3 intermediate, 4 advanced, 5 expert.
 - Candidates are suggestions only. Adding someone still goes through a staffing request or HR.
 - Changes to skills and required skills are recorded in the history with what was added, removed and
   re-levelled. Employees changed by their manager are emailed as before, now including level changes.
+
+### Leave
+
+Employees request time off for themselves, and someone above them decides it:
+
+```
+employee: POST /leave-requests  ->  PENDING
+                                     |-- manager or HR approves -> APPROVED
+                                     |-- manager or HR rejects  -> REJECTED (reason recorded)
+                                     |-- employee cancels       -> CANCELLED
+```
+
+- **Types:** `ANNUAL`, `SICK`, `UNPAID` and `OTHER`. Leave is counted in **working days**, Monday to
+  Friday. Public holidays aren't known, so they count as working days.
+- **Who requests:** an employee for themselves. Their login must be linked to their employee record.
+  Past dates are allowed, so sick leave can be recorded afterwards. One request can't span more than
+  a year.
+- **Who decides:** any manager above the employee in the org chart, or HR. **Nobody can decide their
+  own leave**, HR included. If two people decide the same request at once, the second gets a 409.
+- **No overlaps:** a person can't have two pending or approved requests on the same day.
+- **Annual allowance:** `ANNUAL` leave must fit `app.leave.annual-allowance-days` (20 by default) per
+  calendar year. Pending days count too when asking, so nobody can queue more than they have.
+  Approval checks again. Leave over New Year counts against each year.
+  `GET /employees/{id}/leave-balance?year=2026` shows the allowance and the approved, pending and
+  remaining days.
+- **Cancelling:** the requester can cancel a pending request, or approved leave that hasn't started.
+  Terminating an employee cancels their pending leave and approved leave that hasn't started. Leave
+  already taken is kept.
+- **Seeing leave:** everyone sees their own (`/leave-requests/mine`). Managers see everyone below
+  them (`/leave-requests/team`), which is both their approval queue (`?status=PENDING`) and a team
+  calendar (`?status=APPROVED&from=2026-12-01&to=2026-12-31` lists who is away then). HR sees everyone's
+  (`/leave-requests`).
+- **History:** every step is recorded in the employee's history.
+- **Status:** the `ON_LEAVE` employment status is separate and still set by hand, e.g. for long-term
+  leave. Approved leave doesn't change it.
+
+| When | Who is emailed |
+|---|---|
+| Leave is requested | The employee's direct manager, or the HR mailbox if they have none |
+| Leave is approved or rejected | The employee, with the reason when rejected |
+| Leave is cancelled | The employee's direct manager, or the HR mailbox |
+
+These emails go through the same outbox as the others.
 
 ### Staffing approvals
 
@@ -210,9 +258,10 @@ All secrets come from environment variables. None are stored in the repository.
 | `JWT_SECRET` | yes | Key used to sign login tokens. At least 32 characters. The app won't start with a shorter one. |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | first start | Creates the first ADMIN account when the database has no users yet. Can be removed afterwards. |
 | `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` | for email | SMTP server for notifications. For STARTTLS also set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true`. Without these, emails are only logged. |
-| `NOTIFY_HR_EMAIL` | for email | Shared HR mailbox. It receives new and withdrawn staffing requests, and leave and reporting-line changes made by managers. |
+| `NOTIFY_HR_EMAIL` | for email | Shared HR mailbox. It receives new and withdrawn staffing requests, leave requests from people without a manager, and leave and reporting-line changes made by managers. |
 | `NOTIFY_FROM` | no | Sender address. Defaults to `no-reply@worksphere.local`. |
 | `APP_BASE_URL` | no | Frontend address used for links in emails, e.g. `https://worksphere.example.com`. |
+| `app.leave.annual-allowance-days` (property) | no | Working days of annual leave per person per calendar year. Defaults to 20. |
 | `app.outbox.*` (properties) | no | `poll-interval` (PT30S), `batch-size` (50), `max-attempts` (8), `retention` (P30D). |
 | AWS credentials | for `/ai` | Picked up in the standard AWS way, e.g. `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or `~/.aws/credentials`. The region is `us-east-1`. |
 
@@ -258,9 +307,9 @@ token into the **Authorize** button.
 |---|---|
 | **ADMIN** | Everything, including managing logins, reading the full audit log and handling failed emails. |
 | **HR** | Hire, update, terminate and move employees. Manage departments, offices and projects, including who works on them. Read the change history of any employee, department, office or project. |
-| **Manager** (any login linked to an employee who has reports) | For people below them in the org chart: change leave status, edit skills, and move a report to another manager inside their own team. |
+| **Manager** (any login linked to an employee who has reports) | For people below them in the org chart: approve or reject leave, see their leave and balance, change leave status, edit skills, and move a report to another manager inside their own team. |
 | **Project lead** (a login linked to a project's lead) | Request staffing changes on their own open projects, and view or cancel those requests. HR must approve. Set which skills their project needs. |
-| **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Use the AI assistant. |
+| **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Request and cancel their own leave. Use the AI assistant. |
 
 Managers can't edit their own record, and they can't reach anyone outside their reporting line.
 
@@ -366,6 +415,22 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | POST | `/staffing-requests/{id}/approve` | Apply the change. HR or ADMIN, but not the requester. |
 | POST | `/staffing-requests/{id}/reject` | `{"reason":"..."}`. HR or ADMIN. |
 
+### Leave
+
+All lists accept `?status=&from=&to=`. `from` and `to` (ISO dates) find leave that overlaps those days.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/leave-requests` | Request your own leave: `{"type":"ANNUAL","startDate":"2026-12-21","endDate":"2026-12-24","note":"..."}`. |
+| GET | `/leave-requests/mine` | Your leave. |
+| GET | `/leave-requests/team` | Leave of everyone below you in the org chart. |
+| GET | `/leave-requests` | Everyone's leave, with an optional `employeeId`. HR or ADMIN. |
+| GET | `/leave-requests/{id}` | One request. The employee, a manager above them, or HR. |
+| POST | `/leave-requests/{id}/approve` | A manager above the employee, or HR. Not your own. |
+| POST | `/leave-requests/{id}/reject` | `{"reason":"..."}`. A manager above the employee, or HR. Not your own. |
+| POST | `/leave-requests/{id}/cancel` | Withdraw pending leave, or approved leave that hasn't started. The requester only. |
+| GET | `/employees/{id}/leave-balance?year=` | Annual leave allowance and days used. The employee, a manager above them, or HR. |
+
 ### Audit and AI
 
 | Method | Endpoint | Description |
@@ -399,6 +464,7 @@ Scripts in `src/main/resources/neo4j/migrations` run in order at startup. Each o
 | V0006 | Constraint and indexes for staffing requests. |
 | V0007 | Constraint and indexes for the email outbox. |
 | V0008 | Gives existing skills a level of 3 (intermediate). |
+| V0009 | Constraint and indexes for leave requests. |
 
 To change the schema, add a new `V0005__description.cypher` file. Never edit a migration that has
 already been applied.
@@ -416,6 +482,10 @@ access to Aura to run them. They cover:
 - **Services:** reporting and department cycles, termination rules, directory filters, uniqueness.
 - **Projects and offices:** the 100% allocation limit, reopening checks, availability search, and
   how termination handles projects and offices.
+- **Leave:** requesting and deciding, who may decide (managers at any depth, HR, never yourself),
+  overlaps, the annual allowance including pending days and leave over New Year, cancelling before
+  and after leave starts, cancelling on termination, and who can see whose leave. Leave emails and
+  working-day counting are tested on their own.
 - **Staffing approvals:** request and approve, rules re-checked at approval, requests refused up
   front, no self-approval, requester-only cancel, and a stale second decision being refused.
 - **Skill levels and matching:** default and kept levels, level changes in the history, filtering
@@ -461,6 +531,9 @@ src/main/java/com/example/neo4j/
   [Email outbox and retries](#email-outbox-and-retries)).
 - **Audit tamper protection.** The application can't change audit events, but anyone with direct
   database access could. For strict compliance, also stream audit events to a write-once store.
-- **Checks under concurrency.** The reporting-loop check and the 100% allocation check aren't
+- **Public holidays.** Leave counts Monday to Friday as working days. There's no holiday calendar,
+  and the allowance is the same for everyone.
+- **Checks under concurrency.** Leave requests lock the employee while they are checked, so overlaps
+  and the allowance hold. The reporting-loop check and the 100% allocation check aren't
   protected by a database lock. Two changes made at exactly the same moment could, rarely, get past
   them.

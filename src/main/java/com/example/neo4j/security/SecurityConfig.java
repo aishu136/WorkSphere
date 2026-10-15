@@ -68,6 +68,11 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/staffing-requests/{requestId}/cancel").authenticated()
                 .requestMatchers("/staffing-requests/**").hasAnyRole(Role.HR.name(), Role.ADMIN.name())
 
+                // Leave: everyone's leave is HR only. Own and team leave are checked in LeaveService.
+                .requestMatchers(HttpMethod.GET, "/leave-requests").hasAnyRole(Role.HR.name(), Role.ADMIN.name())
+                .requestMatchers("/leave-requests/**").authenticated()
+                .requestMatchers(HttpMethod.GET, "/employees/{id}/leave-balance").access(team.hrOrSelfOrManagerOf("id"))
+
                 .requestMatchers(HttpMethod.GET, "/employees/**", "/departments/**", "/offices/**", "/projects/**")
                     .authenticated()
 

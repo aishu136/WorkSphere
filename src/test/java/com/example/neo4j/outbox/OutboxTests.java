@@ -52,6 +52,7 @@ import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.notification.StaffingNotifier;
 import com.example.neo4j.repository.AppUserRepository;
 import com.example.neo4j.repository.EmployeeQueries;
+import com.example.neo4j.repository.LeaveQueries;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.repository.StaffingQueries;
 import com.example.neo4j.service.EmployeeService;
@@ -72,7 +73,7 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 @ImportAutoConfiguration(MigrationsAutoConfiguration.class)
 @Import({StaffingService.class, ProjectService.class, EmployeeService.class, StaffingQueries.class,
-        ProjectQueries.class, EmployeeQueries.class, AuditLog.class, StaffingNotifier.class,
+        ProjectQueries.class, EmployeeQueries.class, LeaveQueries.class, AuditLog.class, StaffingNotifier.class,
         OutboxService.class, OutboxDispatcher.class})
 @TestPropertySource(properties = {
         "app.notifications.hr-email=hr@example.com",
