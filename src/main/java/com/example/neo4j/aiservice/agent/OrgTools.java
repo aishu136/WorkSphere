@@ -65,6 +65,8 @@ public class OrgTools {
     public Map<String, Object> searchEmployees(
             @P(value = "Start of the employee's name, case-insensitive", required = false) String name,
             @P(value = "Exact skill name, e.g. Java", required = false) String skill,
+            @P(value = "Only people with the skill at this level or above: 1 beginner, 3 intermediate, "
+                    + "5 expert. Needs skill.", required = false) Integer minSkillLevel,
             @P(value = "Exact company name", required = false) String company,
             @P(value = "Employment status: ACTIVE, ON_LEAVE or TERMINATED", required = false) String status,
             @P(value = "Department id (use findDepartments to get it)", required = false) String departmentId,
@@ -73,7 +75,7 @@ public class OrgTools {
             Integer maxAllocationPercent) {
 
         EmployeeFilter filter = new EmployeeFilter(blankToNull(name), parseStatus(status), blankToNull(departmentId),
-                blankToNull(skill), blankToNull(company), blankToNull(officeId), maxAllocationPercent);
+                blankToNull(skill), minSkillLevel, blankToNull(company), blankToNull(officeId), maxAllocationPercent);
 
         Page<EmployeeResponse> page = employees.search(filter, PageRequest.of(0, MAX_RESULTS));
         return listResult(page.getTotalElements(),
@@ -81,7 +83,7 @@ public class OrgTools {
     }
 
     @Tool("Get full details of one employee by id: job title, email, hire date, status, department, "
-            + "manager, company, skills and number of direct reports.")
+            + "manager, company, skills with levels (1 beginner to 5 expert) and number of direct reports.")
     public EmployeeResponse getEmployee(@P("Employee id") String employeeId) {
         return employees.findById(employeeId);
     }
@@ -163,6 +165,24 @@ public class OrgTools {
             + "allocation on open projects.")
     public EmployeeProjectsResponse getEmployeeProjects(@P("Employee id") String employeeId) {
         return projects.projectsOf(employeeId);
+    }
+
+    @Tool("Suggest people for a project, best match for its required skills first. Only active people "
+            + "not already on it, with at least one required skill and enough free capacity. Each result has "
+            + "a match percent, free capacity, whether they are in the project's department, and their level "
+            + "in each required skill. Returns the project's required skills too; no results if it has none.")
+    public Map<String, Object> findCandidatesForProject(
+            @P("Project id (use findProjects to get it)") String projectId,
+            @P(value = "Free capacity the person needs, in percent, 1-100. Default 1", required = false)
+            Integer allocationPercent) {
+
+        var page = projects.candidates(projectId, allocationPercent == null ? 1 : allocationPercent,
+                PageRequest.of(0, MAX_RESULTS));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("requiredSkills", projects.findById(projectId).requiredSkills());
+        result.putAll(listResult(page.getTotalElements(), page.getContent()));
+        return result;
     }
 
     @Tool("Find skills by name and how many current employees have each. Use it to get the exact skill "

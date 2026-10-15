@@ -1,10 +1,5 @@
 package com.example.neo4j.dto;
 
-import com.example.neo4j.entity.Skill;
-
-public record SkillResponse(String id, String name) {
-
-    public static SkillResponse from(Skill skill) {
-        return new SkillResponse(skill.getId(), skill.getName());
-    }
+// level is 1-5: how good an employee is, or for a project's required skills, the minimum it needs.
+public record SkillResponse(String id, String name, int level) {
 }

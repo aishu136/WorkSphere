@@ -145,7 +145,7 @@ class OrgAssistantAgentTests {
                 .containsExactlyInAnyOrder("searchEmployees", "getEmployee", "getReportingChain",
                         "getDirectReports", "getAllReports", "findDepartments", "getDepartmentMembers",
                         "findOffices", "findProjects", "getProjectMembers", "getEmployeeProjects",
-                        "findSkills", "getStaffingRequests");
+                        "findCandidatesForProject", "findSkills", "getStaffingRequests");
 
         // The caller is passed in by the agent, never offered to the model as an argument.
         ToolSpecification staffingTool = first.toolSpecifications().stream()

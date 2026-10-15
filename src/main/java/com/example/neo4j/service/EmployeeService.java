@@ -1,13 +1,10 @@
 package com.example.neo4j.service;
 
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,11 +25,11 @@ import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.dto.SkillCount;
 import com.example.neo4j.dto.SkillRequest;
+import com.example.neo4j.dto.SkillResponse;
 import com.example.neo4j.dto.UpdateEmployeeRequest;
 import com.example.neo4j.entity.Company;
 import com.example.neo4j.entity.Employee;
 import com.example.neo4j.entity.EmploymentStatus;
-import com.example.neo4j.entity.Skill;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.notification.EmployeeChangeEvent;
@@ -90,6 +87,9 @@ public class EmployeeService {
 
 	@Transactional(readOnly = true)
 	public Page<EmployeeResponse> search(EmployeeFilter filter, Pageable pageable) {
+		if (filter.minSkillLevel() != null && (filter.skill() == null || filter.skill().isBlank())) {
+			throw new IllegalArgumentException("minSkillLevel needs a skill");
+		}
 		return employeeQueries.search(filter, pageable);
 	}
 
@@ -415,21 +415,13 @@ public class EmployeeService {
 		return findById(id);
 	}
 
+	// Adds a skill, or changes its level if the employee already has it.
 	@Transactional
 	public EmployeeResponse addSkill(String id, SkillRequest skill) {
 
-		Employee employee = requireEmployee(id);
-
-		Skill savedSkill = findOrCreateSkill(skill.name());
-
-		boolean alreadyHasSkill = employee.getSkills().stream()
-				.anyMatch(s -> s.getId().equals(savedSkill.getId()));
-		if (!alreadyHasSkill) {
-			employee.getSkills().add(savedSkill);
-			employeeRepository.save(employee);
-
-			auditSkills(id, List.of(savedSkill.getName()), List.of());
-		}
+		requireExists(id);
+		List<SkillResponse> before = employeeQueries.skillsOf(id);
+		applySkills(id, before, SkillChanges.added(before, skill, skillRepository));
 
 		return findById(id);
 	}
@@ -437,28 +429,9 @@ public class EmployeeService {
 	@Transactional
 	public EmployeeResponse replaceSkills(String id, List<SkillRequest> skills) {
 
-		Employee employee = requireEmployee(id);
-
-		List<Skill> savedSkills = new ArrayList<>();
-
-		for (SkillRequest skill : skills) {
-			Skill savedSkill = findOrCreateSkill(skill.name());
-			if (savedSkills.stream().noneMatch(s -> s.getId().equals(savedSkill.getId()))) {
-				savedSkills.add(savedSkill);
-			}
-		}
-
-		Set<String> beforeNames = skillNames(employee.getSkills());
-		Set<String> afterNames = skillNames(savedSkills);
-		List<String> added = afterNames.stream().filter(name -> !beforeNames.contains(name)).sorted().toList();
-		List<String> removed = beforeNames.stream().filter(name -> !afterNames.contains(name)).sorted().toList();
-
-		if (!added.isEmpty() || !removed.isEmpty()) {
-			employee.setSkills(savedSkills);
-			employeeRepository.save(employee);
-
-			auditSkills(id, added, removed);
-		}
+		requireExists(id);
+		List<SkillResponse> before = employeeQueries.skillsOf(id);
+		applySkills(id, before, SkillChanges.replaced(before, skills, skillRepository));
 
 		return findById(id);
 	}
@@ -466,19 +439,9 @@ public class EmployeeService {
 	@Transactional
 	public EmployeeResponse removeSkill(String id, String skillId) {
 
-		Employee employee = requireEmployee(id);
-
-		List<String> removed = employee.getSkills().stream()
-				.filter(skill -> skill.getId().equals(skillId))
-				.map(Skill::getName)
-				.toList();
-
-		if (!removed.isEmpty()) {
-			employee.getSkills().removeIf(skill -> skill.getId().equals(skillId));
-			employeeRepository.save(employee);
-
-			auditSkills(id, List.of(), removed);
-		}
+		requireExists(id);
+		List<SkillResponse> before = employeeQueries.skillsOf(id);
+		applySkills(id, before, SkillChanges.without(before, skillId));
 
 		return findById(id);
 	}
@@ -489,10 +452,18 @@ public class EmployeeService {
 		auditLog.record(action, AuditTargetType.EMPLOYEE, employeeId, details);
 	}
 
-	private void auditSkills(String employeeId, List<String> added, List<String> removed) {
-		Map<String, Object> details = new LinkedHashMap<>();
-		details.put("added", added);
-		details.put("removed", removed);
+	// Writes only what changed; a request that changes nothing is not audited or announced.
+	private void applySkills(String employeeId, List<SkillResponse> before, List<SkillResponse> after) {
+
+		SkillChanges changes = SkillChanges.between(before, after);
+		if (changes.isEmpty()) {
+			return;
+		}
+
+		employeeQueries.removeSkills(employeeId, changes.removedIds());
+		changes.toWrite().forEach(skill -> employeeQueries.setSkill(employeeId, skill.id(), skill.level()));
+
+		Map<String, Object> details = changes.details();
 		audit(AuditAction.EMPLOYEE_SKILLS_CHANGED, employeeId, details);
 		publishChange(employeeId, EmployeeChangeEvent.Type.SKILLS_CHANGED, details);
 	}
@@ -501,10 +472,6 @@ public class EmployeeService {
 	private void publishChange(String employeeId, EmployeeChangeEvent.Type type, Map<String, Object> details) {
 		events.publishEvent(new EmployeeChangeEvent(employeeId, type, details, CurrentUser.username(),
 				CurrentUser.isSelfService()));
-	}
-
-	private static Set<String> skillNames(List<Skill> skills) {
-		return skills.stream().map(Skill::getName).collect(Collectors.toSet());
 	}
 
 	private static String managerId(EmployeeResponse employee) {
@@ -532,19 +499,6 @@ public class EmployeeService {
 		if (employee.getStatus() == EmploymentStatus.TERMINATED) {
 			throw new ConflictException("Employee " + employee.getId() + " is terminated");
 		}
-	}
-
-	// Reuse an existing skill node with the same name instead of creating duplicates.
-	private Skill findOrCreateSkill(String skillName) {
-
-		String name = skillName.trim();
-
-		return skillRepository.findFirstByNameIgnoreCase(name)
-				.orElseGet(() -> {
-					Skill newSkill = new Skill();
-					newSkill.setName(name);
-					return skillRepository.save(newSkill);
-				});
 	}
 
 	private static String normalizeEmail(String email) {

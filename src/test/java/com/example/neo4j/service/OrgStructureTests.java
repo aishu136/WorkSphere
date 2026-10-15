@@ -165,19 +165,19 @@ class OrgStructureTests {
         hire("E2", "Pritam Das", null, null);
         hire("E3", "Asha Rao", eng.id(), null);
 
-        employees.addSkill(priya.id(), new SkillRequest("Java"));
+        employees.addSkill(priya.id(), new SkillRequest("Java", null));
         Company acme = new Company();
         acme.setName("Acme");
         employees.changeCompany(priya.id(), companyRepository.save(acme).getId());
 
         assertThat(names(employees.search(EmployeeFilter.byName("PRI"), FIRST_PAGE)))
                 .containsExactly("Pritam Das", "Priya Sharma");
-        assertThat(names(employees.search(new EmployeeFilter("pri", null, eng.id(), null, null, null, null), FIRST_PAGE)))
+        assertThat(names(employees.search(new EmployeeFilter("pri", null, eng.id(), null, null, null, null, null), FIRST_PAGE)))
                 .containsExactly("Priya Sharma");
-        assertThat(names(employees.search(new EmployeeFilter(null, null, null, "JAVA", "acme", null, null), FIRST_PAGE)))
+        assertThat(names(employees.search(new EmployeeFilter(null, null, null, "JAVA", null, "acme", null, null), FIRST_PAGE)))
                 .containsExactly("Priya Sharma");
 
-        Page<EmployeeResponse> page = employees.search(new EmployeeFilter(null, null, null, null, null, null, null),
+        Page<EmployeeResponse> page = employees.search(new EmployeeFilter(null, null, null, null, null, null, null, null),
                 PageRequest.of(1, 2));
         assertThat(page.getTotalElements()).isEqualTo(3);
         assertThat(names(page)).containsExactly("Priya Sharma");
@@ -220,7 +220,7 @@ class OrgStructureTests {
         assertThat(terminated.department()).isNull();
 
         // Record is kept but excluded from active searches, and can't be changed further.
-        assertThat(names(employees.search(new EmployeeFilter(null, EmploymentStatus.ACTIVE, null, null, null, null, null),
+        assertThat(names(employees.search(new EmployeeFilter(null, EmploymentStatus.ACTIVE, null, null, null, null, null, null),
                 FIRST_PAGE))).containsExactly("Boss", "Dev");
         assertThatThrownBy(() -> employees.assignManager(dev.id(), lead.id())).isInstanceOf(ConflictException.class);
         assertThatThrownBy(() -> employees.changeStatus(lead.id(), EmploymentStatus.ACTIVE))

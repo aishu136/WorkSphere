@@ -55,7 +55,7 @@ public class OfficeService {
 	@Transactional(readOnly = true)
 	public Page<EmployeeResponse> employees(String id, Pageable pageable) {
 		requireExists(id);
-		return employeeQueries.search(new EmployeeFilter(null, null, null, null, null, id, null), pageable);
+		return employeeQueries.search(EmployeeFilter.byOffice(id), pageable);
 	}
 
 	@Transactional

@@ -28,6 +28,7 @@ import com.example.neo4j.dto.SkillCount;
 import com.example.neo4j.dto.SkillResponse;
 import com.example.neo4j.entity.EmploymentStatus;
 import com.example.neo4j.entity.ProjectStatus;
+import com.example.neo4j.entity.Skill;
 
 /**
  * Hand-written Cypher for employee reads and for the org-chart relationships
@@ -49,7 +50,7 @@ public class EmployeeQueries {
                    head([(e)-[:REPORTS_TO]->(m:Employee) | m {.id, .name, .jobTitle}]) AS manager,
                    head([(e)-[:WORKS_FOR]->(c:Company) | c {.id, .name}]) AS company,
                    head([(e)-[:LOCATED_AT]->(o:Office) | o {.id, .code, .name, .city}]) AS office,
-                   [(e)-[:HAS_SKILL]->(s:Skill) | s {.id, .name}] AS skills,
+                   [(e)-[r:HAS_SKILL]->(s:Skill) | s {.id, .name, level: r.level}] AS skills,
                    COUNT { (:Employee)-[:REPORTS_TO]->(e) } AS directReportCount,
                    %s AS allocationPercent
             ORDER BY employee.name, employee.id
@@ -96,8 +97,10 @@ public class EmployeeQueries {
             params.put("departmentId", filter.departmentId());
         }
         if (hasText(filter.skill())) {
-            conditions.add("EXISTS { (e)-[:HAS_SKILL]->(s:Skill) WHERE toLower(s.name) = $skill }");
+            conditions.add("EXISTS { (e)-[r:HAS_SKILL]->(s:Skill) WHERE toLower(s.name) = $skill "
+                    + "AND r.level >= $minSkillLevel }");
             params.put("skill", filter.skill().trim().toLowerCase(Locale.ROOT));
+            params.put("minSkillLevel", filter.minSkillLevel() == null ? Skill.MIN_LEVEL : filter.minSkillLevel());
         }
         if (hasText(filter.company())) {
             conditions.add("EXISTS { (e)-[:WORKS_FOR]->(c:Company) WHERE toLower(c.name) = $company }");
@@ -184,6 +187,20 @@ public class EmployeeQueries {
                 .all());
 
         return new PageImpl<>(content, pageable, total);
+    }
+
+    // The employee's skills with their levels, by name.
+    public List<SkillResponse> skillsOf(String employeeId) {
+        return List.copyOf(client.query("""
+                        MATCH (:Employee {id: $id})-[r:HAS_SKILL]->(s:Skill)
+                        RETURN s.id AS id, s.name AS name, r.level AS level
+                        ORDER BY toLower(name)
+                        """)
+                .bind(employeeId).to("id")
+                .fetchAs(SkillResponse.class)
+                .mappedBy((types, record) -> new SkillResponse(text(record.get("id")), text(record.get("name")),
+                        record.get("level").asInt(Skill.DEFAULT_LEVEL)))
+                .all());
     }
 
     public long countDirectReports(String employeeId) {
@@ -290,6 +307,23 @@ public class EmployeeQueries {
                 .run();
     }
 
+    // Adds the skill, or changes its level if the employee already has it.
+    public void setSkill(String employeeId, String skillId, int level) {
+        client.query("""
+                        MATCH (e:Employee {id: $id}), (s:Skill {id: $skillId})
+                        MERGE (e)-[r:HAS_SKILL]->(s)
+                        SET r.level = $level
+                        """)
+                .bindAll(Map.of("id", employeeId, "skillId", skillId, "level", level))
+                .run();
+    }
+
+    public void removeSkills(String employeeId, List<String> skillIds) {
+        client.query("MATCH (:Employee {id: $id})-[r:HAS_SKILL]->(s:Skill) WHERE s.id IN $skillIds DELETE r")
+                .bindAll(Map.of("id", employeeId, "skillIds", skillIds))
+                .run();
+    }
+
     // ---- Helpers ----------------------------------------------------------
 
     private <T> Page<T> page(String match, Map<String, Object> params, Pageable pageable, String projection,
@@ -321,11 +355,7 @@ public class EmployeeQueries {
         Value company = record.get("company");
         Value office = record.get("office");
 
-        List<SkillResponse> skills = record.get("skills").asList(s -> new SkillResponse(
-                        text(s.get("id")), text(s.get("name"))))
-                .stream()
-                .sorted(Comparator.comparing(SkillResponse::name, String.CASE_INSENSITIVE_ORDER))
-                .toList();
+        List<SkillResponse> skills = skillList(record.get("skills"));
 
         String status = text(e.get("status"));
 
@@ -351,6 +381,15 @@ public class EmployeeQueries {
                 skills,
                 record.get("directReportCount").asLong(),
                 record.get("allocationPercent").asInt());
+    }
+
+    // A list of skill maps {id, name, level}, sorted by name. Skills without a level count as the default.
+    static List<SkillResponse> skillList(Value skills) {
+        return skills.asList(s -> new SkillResponse(text(s.get("id")), text(s.get("name")),
+                        s.get("level").asInt(Skill.DEFAULT_LEVEL)))
+                .stream()
+                .sorted(Comparator.comparing(SkillResponse::name, String.CASE_INSENSITIVE_ORDER))
+                .toList();
     }
 
     static EmployeeSummary toSummary(Record record) {

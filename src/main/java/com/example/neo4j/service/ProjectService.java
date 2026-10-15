@@ -17,11 +17,14 @@ import com.example.neo4j.audit.AuditLog;
 import com.example.neo4j.audit.AuditTargetType;
 import com.example.neo4j.audit.Changes;
 import com.example.neo4j.dto.AssignmentRequest;
+import com.example.neo4j.dto.CandidateResponse;
 import com.example.neo4j.dto.CreateProjectRequest;
 import com.example.neo4j.dto.EmployeeAssignmentResponse;
 import com.example.neo4j.dto.EmployeeProjectsResponse;
 import com.example.neo4j.dto.ProjectMemberResponse;
 import com.example.neo4j.dto.ProjectResponse;
+import com.example.neo4j.dto.SkillRequest;
+import com.example.neo4j.dto.SkillResponse;
 import com.example.neo4j.dto.UpdateProjectRequest;
 import com.example.neo4j.entity.Employee;
 import com.example.neo4j.entity.EmploymentStatus;
@@ -33,6 +36,7 @@ import com.example.neo4j.repository.DepartmentRepository;
 import com.example.neo4j.repository.EmployeeRepository;
 import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.repository.ProjectRepository;
+import com.example.neo4j.repository.SkillRepository;
 
 /*
  * Projects and staffing. The key rule: an employee's allocation across open projects
@@ -48,14 +52,17 @@ public class ProjectService {
 	private final ProjectQueries projectQueries;
 	private final EmployeeRepository employeeRepository;
 	private final DepartmentRepository departmentRepository;
+	private final SkillRepository skillRepository;
 	private final AuditLog auditLog;
 
 	public ProjectService(ProjectRepository projectRepository, ProjectQueries projectQueries,
-			EmployeeRepository employeeRepository, DepartmentRepository departmentRepository, AuditLog auditLog) {
+			EmployeeRepository employeeRepository, DepartmentRepository departmentRepository,
+			SkillRepository skillRepository, AuditLog auditLog) {
 		this.projectRepository = projectRepository;
 		this.projectQueries = projectQueries;
 		this.employeeRepository = employeeRepository;
 		this.departmentRepository = departmentRepository;
+		this.skillRepository = skillRepository;
 		this.auditLog = auditLog;
 	}
 
@@ -276,6 +283,55 @@ public class ProjectService {
 		return findById(id);
 	}
 
+	// ---- Required skills and matching -----------------------------------------
+
+	// Adds a required skill, or changes its minimum level if the project already requires it.
+	@Transactional
+	public ProjectResponse addRequiredSkill(String id, SkillRequest skill) {
+
+		requireProject(id);
+		List<SkillResponse> before = projectQueries.requiredSkillsOf(id);
+		applyRequiredSkills(id, before, SkillChanges.added(before, skill, skillRepository));
+
+		return findById(id);
+	}
+
+	@Transactional
+	public ProjectResponse replaceRequiredSkills(String id, List<SkillRequest> skills) {
+
+		requireProject(id);
+		List<SkillResponse> before = projectQueries.requiredSkillsOf(id);
+		applyRequiredSkills(id, before, SkillChanges.replaced(before, skills, skillRepository));
+
+		return findById(id);
+	}
+
+	@Transactional
+	public ProjectResponse removeRequiredSkill(String id, String skillId) {
+
+		requireProject(id);
+		List<SkillResponse> before = projectQueries.requiredSkillsOf(id);
+		applyRequiredSkills(id, before, SkillChanges.without(before, skillId));
+
+		return findById(id);
+	}
+
+	/**
+	 * People who could join the project, best match for its required skills first. Only active
+	 * employees who aren't on the project yet, have at least one required skill and have at least
+	 * allocationPercent free capacity. Empty when the project requires no skills.
+	 */
+	@Transactional(readOnly = true)
+	public Page<CandidateResponse> candidates(String id, int allocationPercent, Pageable pageable) {
+
+		Project project = requireProject(id);
+		if (!project.getStatus().isOpen()) {
+			throw new ConflictException("Project is " + project.getStatus() + "; people can only join open projects");
+		}
+
+		return projectQueries.candidates(id, allocationPercent, pageable);
+	}
+
 	// ---- Members --------------------------------------------------------------
 
 	/** Adds someone to the project, or changes their role or allocation. */
@@ -343,6 +399,20 @@ public class ProjectService {
 
 	private void audit(AuditAction action, String projectId, Map<String, Object> details) {
 		auditLog.record(action, AuditTargetType.PROJECT, projectId, details);
+	}
+
+	// Writes only what changed; a request that changes nothing is not audited.
+	private void applyRequiredSkills(String projectId, List<SkillResponse> before, List<SkillResponse> after) {
+
+		SkillChanges changes = SkillChanges.between(before, after);
+		if (changes.isEmpty()) {
+			return;
+		}
+
+		projectQueries.removeRequiredSkills(projectId, changes.removedIds());
+		changes.toWrite().forEach(skill -> projectQueries.setRequiredSkill(projectId, skill.id(), skill.level()));
+
+		audit(AuditAction.PROJECT_SKILLS_CHANGED, projectId, changes.details());
 	}
 
 	private Project requireProject(String id) {

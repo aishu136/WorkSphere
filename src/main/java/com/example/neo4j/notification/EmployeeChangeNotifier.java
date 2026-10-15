@@ -172,12 +172,15 @@ public class EmployeeChangeNotifier {
                     """
                     %s updated your skills in WorkSphere.
 
-                    Added:   %s
-                    Removed: %s
+                    Added:         %s
+                    Removed:       %s
+                    Level changes: %s
 
+                    Levels go from 1 (beginner) to 5 (expert).
                     If this isn't right, please contact your manager.
                     """.formatted(actorName, listOrDash(event.details().get("added")),
-                            listOrDash(event.details().get("removed"))))));
+                            listOrDash(event.details().get("removed")),
+                            listOrDash(event.details().get("levelChanged"))))));
         }
 
         return emails;

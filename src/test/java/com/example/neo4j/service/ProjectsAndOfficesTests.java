@@ -124,7 +124,7 @@ class ProjectsAndOfficesTests {
         assertThat(placed.office().code()).isEqualTo("BLR-01");
         assertThat(placed.office().city()).isEqualTo("Bengaluru");
 
-        assertThat(names(employees.search(new EmployeeFilter(null, null, null, null, null, blr, null), FIRST_PAGE)
+        assertThat(names(employees.search(EmployeeFilter.byOffice(blr), FIRST_PAGE)
                 .getContent())).containsExactly("Name A");
         assertThat(offices.findById(blr).employeeCount()).isEqualTo(1);
         assertThat(offices.search("chenn", FIRST_PAGE).getContent()).extracting(OfficeResponse::id)
@@ -213,20 +213,20 @@ class ProjectsAndOfficesTests {
         String busy = hire("BUSY");
         String free = hire("FREE");
         String other = hire("OTHER");
-        employees.addSkill(busy, new SkillRequest("Java"));
-        employees.addSkill(free, new SkillRequest("Java"));
+        employees.addSkill(busy, new SkillRequest("Java", null));
+        employees.addSkill(free, new SkillRequest("Java", null));
 
         String p = project("P", ProjectStatus.ACTIVE);
         assign(p, busy, 80);
         assign(p, free, 20);
 
         List<EmployeeResponse> available = employees.search(
-                new EmployeeFilter(null, null, null, "java", null, null, 50), FIRST_PAGE).getContent();
+                new EmployeeFilter(null, null, null, "java", null, null, null, 50), FIRST_PAGE).getContent();
         assertThat(names(available)).containsExactly("Name FREE");
         assertThat(available.get(0).allocationPercent()).isEqualTo(20);
 
         // With no skill filter, the person on no projects (0%) counts as available too.
-        assertThat(names(employees.search(new EmployeeFilter(null, null, null, null, null, null, 50), FIRST_PAGE)
+        assertThat(names(employees.search(new EmployeeFilter(null, null, null, null, null, null, null, 50), FIRST_PAGE)
                 .getContent())).containsExactly("Name FREE", "Name OTHER");
         assertThat(other).isNotNull();
     }

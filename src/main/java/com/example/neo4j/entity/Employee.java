@@ -1,8 +1,6 @@
 package com.example.neo4j.entity;
 
 import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 
 import org.springframework.data.neo4j.core.schema.GeneratedValue;
@@ -18,10 +16,11 @@ import lombok.Setter;
 import lombok.ToString;
 
 /*
- * Only relationships to leaf nodes (Skill, Company) are mapped here.
+ * Only the relationship to Company is mapped here.
  * REPORTS_TO and MEMBER_OF are managed with Cypher in EmployeeQueries: mapping them
  * would make every load follow manager -> manager's department -> its head -> ...
- * and pull in the whole organisation.
+ * and pull in the whole organisation. HAS_SKILL carries a level, so it is managed
+ * there too.
  */
 @Node("Employee")
 @Getter
@@ -55,9 +54,6 @@ public class Employee {
     private EmploymentStatus status = EmploymentStatus.ACTIVE;
 
     private LocalDate terminationDate;
-
-    @Relationship(type = "HAS_SKILL")
-    private List<Skill> skills = new ArrayList<>();
 
     @Relationship(type = "WORKS_FOR")
     private Company company;

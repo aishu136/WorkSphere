@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -54,6 +55,7 @@ import com.example.neo4j.controller.UserController;
 import com.example.neo4j.dto.CreateEmployeeRequest;
 import com.example.neo4j.dto.DepartmentSummary;
 import com.example.neo4j.dto.EmployeeFilter;
+import com.example.neo4j.dto.SkillRequest;
 import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.entity.EmploymentStatus;
@@ -252,13 +254,13 @@ class SecurityAndDtoTests {
 
     @Test
     void directoryFiltersAndPagingAreBound() throws Exception {
-        EmployeeFilter expected = new EmployeeFilter("pri", EmploymentStatus.ACTIVE, "d1", "java", "acme", "o1", 50);
+        EmployeeFilter expected = new EmployeeFilter("pri", EmploymentStatus.ACTIVE, "d1", "java", 4, "acme", "o1", 50);
         when(employeeService.search(expected, PageRequest.of(1, 2)))
                 .thenReturn(new PageImpl<>(List.of(employee("a", "Priya")), PageRequest.of(1, 2), 3));
 
         mvc.perform(get("/employees")
                         .param("name", "pri").param("status", "ACTIVE").param("departmentId", "d1")
-                        .param("skill", "java").param("company", "acme")
+                        .param("skill", "java").param("minSkillLevel", "4").param("company", "acme")
                         .param("officeId", "o1").param("maxAllocation", "50")
                         .param("page", "1").param("size", "2")
                         .with(jwt().authorities(role("EMPLOYEE"))))
@@ -674,5 +676,63 @@ class SecurityAndDtoTests {
         mvc.perform(delete("/departments/d1").with(jwt().authorities(role("ADMIN"))))
                 .andExpect(status().isNoContent());
         verify(departmentService).delete("d1");
+    }
+
+    // ---- Skill levels and matching ----------------------------------------------
+
+    @Test
+    void hrOrTheProjectLeadCanSetRequiredSkills() throws Exception {
+        when(projectQueries.isLedBy("mgr", "p1")).thenReturn(true);
+        String body = "[{\"name\":\"Java\",\"level\":4}]";
+
+        mvc.perform(put("/projects/p1/skills").with(manager()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk());
+        mvc.perform(post("/projects/p1/skills").with(manager()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Kafka\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(delete("/projects/p1/skills/s1").with(manager())).andExpect(status().isOk());
+        mvc.perform(put("/projects/p2/skills").with(jwt().authorities(role("HR")))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk());
+
+        // Not their project.
+        mvc.perform(put("/projects/p2/skills").with(manager()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/projects/p2/skills/s1").with(manager())).andExpect(status().isForbidden());
+
+        verify(projectService).replaceRequiredSkills("p1", List.of(new SkillRequest("Java", 4)));
+        verify(projectService).addRequiredSkill("p1", new SkillRequest("Kafka", null));
+    }
+
+    @Test
+    void skillLevelsMustBeOneToFive() throws Exception {
+        mvc.perform(post("/employees/e1/skills").with(jwt().authorities(role("HR")))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Java\",\"level\":6}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/projects/p1/skills").with(jwt().authorities(role("HR")))
+                        .contentType(MediaType.APPLICATION_JSON).content("[{\"name\":\"Java\",\"level\":0}]"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/employees").param("skill", "java").param("minSkillLevel", "9")
+                        .with(jwt().authorities(role("EMPLOYEE"))))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void anyoneCanSeeCandidatesWithCapacityAndPaging() throws Exception {
+        when(projectService.candidates(eq("p1"), anyInt(), any(Pageable.class))).thenReturn(Page.empty());
+
+        mvc.perform(get("/projects/p1/candidates").param("allocationPercent", "50").param("size", "5")
+                        .with(jwt().authorities(role("EMPLOYEE"))))
+                .andExpect(status().isOk());
+        verify(projectService).candidates("p1", 50, PageRequest.of(0, 5));
+
+        // Without allocationPercent, anyone with some free capacity counts.
+        mvc.perform(get("/projects/p1/candidates").with(jwt().authorities(role("EMPLOYEE"))))
+                .andExpect(status().isOk());
+        verify(projectService).candidates("p1", 1, PageRequest.of(0, 20));
+
+        mvc.perform(get("/projects/p1/candidates").param("allocationPercent", "0")
+                        .with(jwt().authorities(role("EMPLOYEE"))))
+                .andExpect(status().isBadRequest());
     }
 }

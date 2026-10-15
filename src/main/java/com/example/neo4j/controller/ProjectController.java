@@ -1,11 +1,14 @@
 package com.example.neo4j.controller;
 
+import java.util.List;
+
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import com.example.neo4j.dto.AssignmentRequest;
+import com.example.neo4j.dto.CandidateResponse;
 import com.example.neo4j.dto.CreateProjectRequest;
 import com.example.neo4j.dto.EmployeeProjectsResponse;
 import com.example.neo4j.dto.PageParams;
@@ -13,11 +16,14 @@ import com.example.neo4j.dto.PageResponse;
 import com.example.neo4j.dto.ProjectMemberResponse;
 import com.example.neo4j.dto.ProjectResponse;
 import com.example.neo4j.dto.ProjectStatusRequest;
+import com.example.neo4j.dto.SkillRequest;
 import com.example.neo4j.dto.UpdateProjectRequest;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.service.ProjectService;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 
 // Reads: any logged-in user. Changes: HR or ADMIN (enforced in SecurityConfig).
 @RestController
@@ -96,6 +102,44 @@ public class ProjectController {
     @DeleteMapping("/projects/{id}/department")
     public ResponseEntity<ProjectResponse> removeDepartment(@PathVariable("id") String id) {
         return ResponseEntity.ok(service.removeDepartment(id));
+    }
+
+    // ---- Required skills and matching -----------------------------------------
+    // Required skills can be changed by HR or the project's lead (see SecurityConfig).
+
+    // Adds a required skill, or changes its minimum level: {"name":"Java","level":4}.
+    @PostMapping("/projects/{id}/skills")
+    public ResponseEntity<ProjectResponse> addRequiredSkill(
+            @PathVariable("id") String id,
+            @RequestBody @Valid SkillRequest skill) {
+
+        return ResponseEntity.ok(service.addRequiredSkill(id, skill));
+    }
+
+    @PutMapping("/projects/{id}/skills")
+    public ResponseEntity<ProjectResponse> replaceRequiredSkills(
+            @PathVariable("id") String id,
+            @RequestBody List<@Valid SkillRequest> skills) {
+
+        return ResponseEntity.ok(service.replaceRequiredSkills(id, skills));
+    }
+
+    @DeleteMapping("/projects/{id}/skills/{skillId}")
+    public ResponseEntity<ProjectResponse> removeRequiredSkill(
+            @PathVariable("id") String id,
+            @PathVariable("skillId") String skillId) {
+
+        return ResponseEntity.ok(service.removeRequiredSkill(id, skillId));
+    }
+
+    // Best matches for the project's required skills, among people with at least allocationPercent free.
+    @GetMapping("/projects/{id}/candidates")
+    public ResponseEntity<PageResponse<CandidateResponse>> candidates(
+            @PathVariable("id") String id,
+            @RequestParam(name = "allocationPercent", defaultValue = "1") @Min(1) @Max(100) int allocationPercent,
+            @Valid @ParameterObject PageParams paging) {
+
+        return ResponseEntity.ok(PageResponse.of(service.candidates(id, allocationPercent, paging.toPageable())));
     }
 
     // ---- Members --------------------------------------------------------------

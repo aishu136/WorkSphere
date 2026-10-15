@@ -144,9 +144,9 @@ class ManagerChangeNotificationTests {
     @Test
     void aManagerChangingSkillsOnlyEmailsTheEmployee() {
         actAs("chitra", "ROLE_EMPLOYEE");
-        employees.addSkill(dev, new SkillRequest("Kafka"));
+        employees.addSkill(dev, new SkillRequest("Kafka", null));
         // Adding the same skill again changes nothing, so it sends nothing.
-        employees.addSkill(dev, new SkillRequest("kafka"));
+        employees.addSkill(dev, new SkillRequest("kafka", null));
 
         assertThat(recipients()).containsExactly("dev@example.com");
     }
@@ -155,7 +155,7 @@ class ManagerChangeNotificationTests {
     void theSameChangeByHrSendsNothing() {
         actAs("hr.user", "ROLE_HR");
         employees.changeStatus(dev, EmploymentStatus.ON_LEAVE);
-        employees.addSkill(dev, new SkillRequest("Kafka"));
+        employees.addSkill(dev, new SkillRequest("Kafka", null));
 
         assertThat(outbox.findAll()).isEmpty();
     }

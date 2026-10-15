@@ -22,6 +22,10 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
   join with a role and an allocation percentage. **Nobody can be allocated more than 100% across
   open projects**, and search can find people with free capacity, e.g.
   `/employees?skill=java&maxAllocation=50`.
+- **Skill levels and matching.** Every skill has a level from 1 (beginner) to 5 (expert). Projects
+  list the skills they need and the minimum level for each, and `/projects/{id}/candidates` ranks
+  who could join: best skill match first, then people in the project's department, then most free
+  capacity. See [Skill levels and matching](#skill-levels-and-matching).
 - **Staffing approvals.** A project lead can request to add, change or remove people on their own
   open project. HR approves or rejects each request, and the change is only applied on approval.
   HR, the lead and the affected employee are notified by email, with automatic retries. See
@@ -46,7 +50,8 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
 (:Employee)-[:MEMBER_OF]->(:Department)       department membership
 (:Department)-[:PART_OF]->(:Department)       sub-departments, any depth
 (:Department)-[:HEADED_BY]->(:Employee)       department head
-(:Employee)-[:HAS_SKILL]->(:Skill)
+(:Employee)-[:HAS_SKILL {level}]->(:Skill)    level 1-5
+(:Project)-[:REQUIRES {level}]->(:Skill)      skills a project needs, minimum level 1-5
 (:Employee)-[:WORKS_FOR]->(:Company)
 (:Employee)-[:LOCATED_AT]->(:Office)
 (:Employee)-[:WORKS_ON {role, allocationPercent, since}]->(:Project)
@@ -56,8 +61,8 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
 (:AuditEvent)                                  append-only audit trail
 ```
 
-The `Employee` and `Department` entities map only their links to skills and companies. All other
-links (manager, membership, parent, head, office, projects) are read and written with targeted Cypher
+The `Employee` entity maps only its link to a company. All other links (manager, membership,
+parent, head, office, skills, projects) are read and written with targeted Cypher
 in the `*Queries` classes. That way, loading one employee never loads the rest of the organisation.
 
 ### Projects and allocation
@@ -70,6 +75,29 @@ in the `*Queries` classes. That way, loading one employee never loads the rest o
 - Assignments on completed and cancelled projects are kept as history but don't count toward
   allocation. People can only join open projects.
 - A project with any members, including past ones, can't be deleted. Set it to `CANCELLED` instead.
+
+### Skill levels and matching
+
+Levels are 1 beginner, 2 basic, 3 intermediate, 4 advanced, 5 expert.
+
+- Skills are added with `{"name":"Java","level":4}`. The level can be left out: a skill the person
+  already has keeps its level, and a new one gets 3. Adding a skill someone already has changes its
+  level. Skills recorded before levels existed were set to 3 by migration V0008.
+- The directory can filter by level: `/employees?skill=java&minSkillLevel=4`.
+- A project's required skills use the same format, where the level is the minimum the project needs.
+  HR or the project's lead can change them.
+- `GET /projects/{id}/candidates?allocationPercent=50` suggests people for an open project:
+  - **Who:** active employees who aren't on the project yet, have at least one required skill, and
+    have at least `allocationPercent` free capacity (default 1, so anyone not fully booked).
+  - **Match %:** the average over the required skills. Meeting the level counts fully, being below
+    it counts as your level divided by the required level, and not having the skill counts as 0.
+    For example, Java 2 of a required 4, and no Kafka, gives (0.5 + 0) / 2 = 25%.
+  - **Order:** highest match first, then people in the owning department or one of its
+    sub-departments, then most free capacity.
+  - Each candidate lists their level in every required skill, so the gaps are visible.
+- Candidates are suggestions only. Adding someone still goes through a staffing request or HR.
+- Changes to skills and required skills are recorded in the history with what was added, removed and
+  re-levelled. Employees changed by their manager are emailed as before, now including level changes.
 
 ### Staffing approvals
 
@@ -154,6 +182,7 @@ logged-in user can already read through the API:
 - finding departments and their members
 - finding offices
 - finding projects, project members and an employee's projects
+- skills with levels, and suggesting candidates for a project
 
 The assistant can't change data or read audit history, so it can't be used to get around
 permissions. If a tool fails, for example with an unknown id, the error goes back to the model as a
@@ -230,7 +259,7 @@ token into the **Authorize** button.
 | **ADMIN** | Everything, including managing logins, reading the full audit log and handling failed emails. |
 | **HR** | Hire, update, terminate and move employees. Manage departments, offices and projects, including who works on them. Read the change history of any employee, department, office or project. |
 | **Manager** (any login linked to an employee who has reports) | For people below them in the org chart: change leave status, edit skills, and move a report to another manager inside their own team. |
-| **Project lead** (a login linked to a project's lead) | Request staffing changes on their own open projects, and view or cancel those requests. HR must approve. |
+| **Project lead** (a login linked to a project's lead) | Request staffing changes on their own open projects, and view or cancel those requests. HR must approve. Set which skills their project needs. |
 | **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Use the AI assistant. |
 
 Managers can't edit their own record, and they can't reach anyone outside their reporting line.
@@ -269,7 +298,7 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/employees?name=&status=&departmentId=&skill=&company=&officeId=&maxAllocation=` | Directory search. `maxAllocation` (0-100) finds people with free capacity. |
+| GET | `/employees?name=&status=&departmentId=&skill=&minSkillLevel=&company=&officeId=&maxAllocation=` | Directory search. `minSkillLevel` (1-5) needs `skill`. `maxAllocation` (0-100) finds people with free capacity. |
 | GET | `/employees/me` | Your own employee profile. |
 | POST | `/employees` | Hire. `departmentId` and `managerId` are optional. |
 | GET / PUT | `/employees/{id}` | Read or update a profile. |
@@ -283,7 +312,7 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | PUT | `/employees/{id}/company/{companyId}` | Set the employee's company. |
 | PUT / DELETE | `/employees/{id}/office/{officeId}` | Set or remove the employee's office. |
 | GET | `/employees/{id}/projects` | The employee's projects and total allocation on open ones. |
-| POST / PUT | `/employees/{id}/skills` | Add one skill, or replace all skills. |
+| POST / PUT | `/employees/{id}/skills` | Add one skill or change its level (`{"name":"Java","level":4}`), or replace all skills (a list). |
 | DELETE | `/employees/{id}/skills/{skillId}` | Remove a skill. |
 | GET | `/employees/{id}/history` | Change history for this employee. HR or ADMIN. |
 
@@ -320,6 +349,9 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | GET | `/projects/{id}/members` | Who is on the project, with role and allocation. |
 | PUT | `/projects/{id}/members/{employeeId}` | Add someone, or change their role or allocation: `{"role":"...","allocationPercent":50}`. |
 | DELETE | `/projects/{id}/members/{employeeId}` | Remove someone from the project. |
+| POST / PUT | `/projects/{id}/skills` | Add one required skill or change its minimum level, or replace them all. HR or the project lead. |
+| DELETE | `/projects/{id}/skills/{skillId}` | Remove a required skill. HR or the project lead. |
+| GET | `/projects/{id}/candidates?allocationPercent=` | People who could join, best skill match first. See [Skill levels and matching](#skill-levels-and-matching). |
 | GET | `/projects/{id}/history` | Change history, including membership changes and staffing requests. HR or ADMIN. |
 
 ### Staffing requests
@@ -366,6 +398,7 @@ Scripts in `src/main/resources/neo4j/migrations` run in order at startup. Each o
 | V0005 | Constraints and indexes for offices and projects. |
 | V0006 | Constraint and indexes for staffing requests. |
 | V0007 | Constraint and indexes for the email outbox. |
+| V0008 | Gives existing skills a level of 3 (intermediate). |
 
 To change the schema, add a new `V0005__description.cypher` file. Never edit a migration that has
 already been applied.
@@ -385,6 +418,9 @@ access to Aura to run them. They cover:
   how termination handles projects and offices.
 - **Staffing approvals:** request and approve, rules re-checked at approval, requests refused up
   front, no self-approval, requester-only cancel, and a stale second decision being refused.
+- **Skill levels and matching:** default and kept levels, level changes in the history, filtering
+  by minimum level, required skills, and candidate ranking: match %, department, free capacity,
+  and who is left out.
 - **Email notifications and outbox:** recipients and content for each step, and missing addresses.
   Manager self-service emails: sent only for manager changes, not for HR changes, no-op changes, or
   changes that fail.

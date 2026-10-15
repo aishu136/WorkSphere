@@ -1,6 +1,7 @@
 package com.example.neo4j.dto;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import com.example.neo4j.entity.ProjectStatus;
 
@@ -14,5 +15,7 @@ public record ProjectResponse(
         LocalDate endDate,
         DepartmentSummary department,
         EmployeeSummary lead,
-        long memberCount) {
+        long memberCount,
+        // Skills the project needs, each with the minimum level, by name.
+        List<SkillResponse> requiredSkills) {
 }

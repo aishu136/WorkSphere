@@ -84,6 +84,10 @@ class LegacyDataMigrationTests {
                 .query("MATCH (:Employee {id: 'p2'})-[:HAS_SKILL]->(s) RETURN toLower(trim(s.name)) AS name ORDER BY name")
                 .fetchAs(String.class).all());
         assertThat(balaSkills).containsExactly("java", "python");
+
+        // Skills from before levels existed count as intermediate (3).
+        assertThat(count("MATCH ()-[r:HAS_SKILL]->() WHERE r.level = 3 RETURN count(r)")).isEqualTo(3);
+        assertThat(count("MATCH ()-[r:HAS_SKILL]->() WHERE r.level IS NULL RETURN count(r)")).isZero();
     }
 
     @Test

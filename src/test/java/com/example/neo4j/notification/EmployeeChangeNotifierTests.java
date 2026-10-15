@@ -149,6 +149,7 @@ class EmployeeChangeNotifierTests {
         Map<String, Object> details = new LinkedHashMap<>();
         details.put("added", List.of("Kafka", "Spring"));
         details.put("removed", List.of());
+        details.put("levelChanged", List.of("Java: 2 -> 4"));
 
         notifier().onEmployeeChange(byManager(Type.SKILLS_CHANGED, details));
 
@@ -157,8 +158,9 @@ class EmployeeChangeNotifierTests {
         assertThat(email.subject()).isEqualTo("[WorkSphere] Your skills were updated");
         assertThat(email.body())
                 .contains("Chitra CTO updated your skills")
-                .contains("Added:   Kafka, Spring")
-                .contains("Removed: -");
+                .contains("Added:         Kafka, Spring")
+                .contains("Removed:       -")
+                .contains("Level changes: Java: 2 -> 4");
     }
 
     @Test

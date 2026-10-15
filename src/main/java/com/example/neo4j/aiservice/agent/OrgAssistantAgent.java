@@ -91,6 +91,8 @@ public class OrgAssistantAgent {
             - Earlier questions and answers in this conversation are there to help you understand follow-up
               questions ("their", "that team"). Look data up again rather than relying on earlier answers.
             - To search by skill, use findSkills first to get the exact skill name.
+            - Skill levels go from 1 (beginner) to 5 (expert).
+            - To suggest who could join or staff a project, use findCandidatesForProject.
             - If a list was cut short (showing is less than total), say so.
             - Answer in plain English and keep it short. Don't show internal ids unless asked.
             """;
