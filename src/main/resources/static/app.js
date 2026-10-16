@@ -5,13 +5,16 @@
  * No build step and no libraries. Everything shown comes from the API and is rendered as text
  * (never as HTML), so names and notes can't inject markup.
  *
- * The login token lives in sessionStorage: it is gone when the tab is closed.
+ * The tokens live in sessionStorage: they are gone when the tab is closed. Access tokens are
+ * short-lived; when one expires, the refresh token gets a new pair once, then the request is retried.
  */
 
 const TOKEN_KEY = 'worksphere.token';
+const REFRESH_KEY = 'worksphere.refresh';
 
 const state = {
   token: null,
+  refreshToken: null,
   me: null,          // {username, roles, employeeId}
   conversationId: null,
   chat: [],
@@ -26,7 +29,7 @@ class ApiError extends Error {
   }
 }
 
-async function api(method, path, body) {
+async function api(method, path, body, retried = false) {
   const headers = { Accept: 'application/json' };
   if (state.token) headers.Authorization = 'Bearer ' + state.token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -38,7 +41,8 @@ async function api(method, path, body) {
   });
 
   if (response.status === 401 && state.token) {
-    logout('Your session has expired. Please log in again.');
+    if (!retried && await renewTokens()) return api(method, path, body, true);
+    endSession('Your session has expired. Please log in again.');
     throw new ApiError(401, 'Not logged in');
   }
 
@@ -183,14 +187,58 @@ async function route() {
   }
 }
 
-function logout(message) {
+// One refresh at a time: requests failing together wait for the same one.
+let renewing = null;
+
+function renewTokens() {
+  if (!state.refreshToken) return Promise.resolve(false);
+  renewing ??= (async () => {
+    try {
+      const response = await fetch('/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ refreshToken: state.refreshToken }),
+      });
+      if (!response.ok) return false;
+      saveTokens(await response.json());
+      return true;
+    } catch {
+      return false;
+    } finally {
+      renewing = null;
+    }
+  })();
+  return renewing;
+}
+
+function saveTokens(tokens) {
+  state.token = tokens.accessToken;
+  state.refreshToken = tokens.refreshToken;
+  try {
+    sessionStorage.setItem(TOKEN_KEY, tokens.accessToken);
+    sessionStorage.setItem(REFRESH_KEY, tokens.refreshToken);
+  } catch { /* storage unavailable */ }
+}
+
+// Forgets the session in this tab and shows the login page.
+function endSession(message) {
   state.token = null;
+  state.refreshToken = null;
   state.me = null;
   state.conversationId = null;
   state.chat = [];
-  try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* storage unavailable */ }
+  try {
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(REFRESH_KEY);
+  } catch { /* storage unavailable */ }
   location.hash = '';
   loginView(message);
+}
+
+// Logs out on the server too, so the tokens stop working everywhere.
+async function logout() {
+  try { await api('POST', '/auth/logout'); } catch { /* ends locally either way */ }
+  endSession('You have been logged out.');
 }
 
 document.getElementById('logout').addEventListener('click', () => logout());
@@ -209,8 +257,9 @@ function loginView(message) {
     onsubmit: event => {
       event.preventDefault();
       act(submit, errors, async () => {
-        const token = await post('/auth/login', { username: username.value.trim(), password: password.value });
-        await startSession(token.accessToken);
+        const tokens = await post('/auth/login', { username: username.value.trim(), password: password.value });
+        saveTokens(tokens);
+        await startSession();
         route();
       });
     },
@@ -221,10 +270,8 @@ function loginView(message) {
   username.focus();
 }
 
-async function startSession(token) {
-  state.token = token;
+async function startSession() {
   state.me = await get('/auth/me');
-  try { sessionStorage.setItem(TOKEN_KEY, token); } catch { /* storage unavailable */ }
 }
 
 // ---- Org chart --------------------------------------------------------------------
@@ -557,13 +604,16 @@ async function assistantView() {
 // ---- Start ----------------------------------------------------------------------------------
 
 (async function start() {
-  let token = null;
-  try { token = sessionStorage.getItem(TOKEN_KEY); } catch { /* storage unavailable */ }
-  if (token) {
+  try {
+    state.token = sessionStorage.getItem(TOKEN_KEY);
+    state.refreshToken = sessionStorage.getItem(REFRESH_KEY);
+  } catch { /* storage unavailable */ }
+  if (state.token) {
     try {
-      await startSession(token);
+      await startSession();
     } catch {
       state.token = null;
+      state.refreshToken = null;
       state.me = null;
     }
   }

@@ -9,6 +9,7 @@ import com.example.neo4j.dto.CreateUserRequest;
 import com.example.neo4j.dto.PageParams;
 import com.example.neo4j.dto.PageResponse;
 import com.example.neo4j.dto.UserResponse;
+import com.example.neo4j.security.SessionService;
 import com.example.neo4j.service.UserService;
 
 import jakarta.validation.Valid;
@@ -19,9 +20,11 @@ import jakarta.validation.Valid;
 public class UserController {
 
     private final UserService service;
+    private final SessionService sessions;
 
-    public UserController(UserService service) {
+    public UserController(UserService service, SessionService sessions) {
         this.service = service;
+        this.sessions = sessions;
     }
 
     @PostMapping
@@ -41,6 +44,13 @@ public class UserController {
     @DeleteMapping("/{id}/employee")
     public ResponseEntity<UserResponse> unlinkEmployee(@PathVariable("id") String id) {
         return ResponseEntity.ok(UserResponse.from(service.unlinkEmployee(id)));
+    }
+
+    // Ends every session of this login: its tokens stop working at once.
+    @DeleteMapping("/{id}/sessions")
+    public ResponseEntity<Void> revokeSessions(@PathVariable("id") String id) {
+        sessions.revokeSessions(id);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping

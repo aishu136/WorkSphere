@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -75,6 +76,18 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body("Malformed request");
+    }
+
+    // Too many failed logins. Retry-After says when to try again.
+    @ExceptionHandler(TooManyLoginAttemptsException.class)
+    public ResponseEntity<String> handleTooManyLogins(TooManyLoginAttemptsException ex) {
+
+        // Rounded up, so a client that waits exactly this long is let in.
+        long seconds = Math.max(1, (ex.retryAfter().toMillis() + 999) / 1000);
+        return ResponseEntity
+                .status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(seconds))
+                .body("Too many failed logins. Try again in " + Math.max(1, (seconds + 59) / 60) + " minute(s).");
     }
 
     // Wrong username/password on /auth/login. Deliberately vague so it doesn't reveal which one was wrong.

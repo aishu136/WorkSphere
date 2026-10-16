@@ -21,9 +21,11 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
@@ -48,7 +50,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             // Rules are checked top to bottom; the first match wins.
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/login", "/auth/refresh").permitAll()
                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error").permitAll()
                 // The web app's static files. They hold no data; everything they show comes from the API.
                 .requestMatchers(HttpMethod.GET, "/", "/index.html", "/app.js", "/app.css", "/favicon.ico").permitAll()
@@ -125,11 +127,15 @@ public class SecurityConfig {
         return new NimbusJwtEncoder(new ImmutableSecret<SecurityContext>(jwtSigningKey));
     }
 
+    // Besides the signature and expiry, every token is checked against its login (TokenValidity),
+    // so logging out, revoking sessions and disabling a login take effect at once.
     @Bean
-    JwtDecoder jwtDecoder(SecretKey jwtSigningKey) {
-        return NimbusJwtDecoder.withSecretKey(jwtSigningKey)
+    JwtDecoder jwtDecoder(SecretKey jwtSigningKey, TokenValidity tokenValidity) {
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(jwtSigningKey)
                 .macAlgorithm(MacAlgorithm.HS256)
                 .build();
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefault(), tokenValidity));
+        return decoder;
     }
 
     // BCrypt by default; the {bcrypt} prefix lets the algorithm be upgraded later without breaking old hashes.

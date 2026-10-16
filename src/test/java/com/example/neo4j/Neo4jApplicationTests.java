@@ -119,6 +119,43 @@ class Neo4jApplicationTests {
 	}
 
 	@Test
+	void sessionsRefreshOnceAndEndOnReuseOrLogout() throws Exception {
+
+		String admin = "Bearer " + call(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+				.content("{\"username\":\"admin\",\"password\":\"bootstrap-password\"}"), 200)
+				.get("accessToken").asText();
+		for (String username : new String[] {"session.user", "logout.user"}) {
+			call(post("/users").header("Authorization", admin).contentType(MediaType.APPLICATION_JSON)
+					.content("{\"username\":\"" + username + "\",\"password\":\"a-long-enough-password\","
+							+ "\"roles\":[\"EMPLOYEE\"]}"), 201);
+		}
+
+		JsonNode first = call(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+				.content("{\"username\":\"session.user\",\"password\":\"a-long-enough-password\"}"), 200);
+		String refresh1 = first.get("refreshToken").asText();
+
+		JsonNode second = call(post("/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+				.content("{\"refreshToken\":\"" + refresh1 + "\"}"), 200);
+		String access2 = "Bearer " + second.get("accessToken").asText();
+		mvc.perform(get("/auth/me").header("Authorization", access2)).andExpect(status().isOk());
+
+		// The used refresh token again: everything of that login is revoked.
+		mvc.perform(post("/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+				.content("{\"refreshToken\":\"" + refresh1 + "\"}")).andExpect(status().isUnauthorized());
+		mvc.perform(get("/auth/me").header("Authorization", access2)).andExpect(status().isUnauthorized());
+		mvc.perform(post("/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+						.content("{\"refreshToken\":\"" + second.get("refreshToken").asText() + "\"}"))
+				.andExpect(status().isUnauthorized());
+
+		// Logging out ends the access token at once.
+		String other = "Bearer " + call(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+				.content("{\"username\":\"logout.user\",\"password\":\"a-long-enough-password\"}"), 200)
+				.get("accessToken").asText();
+		mvc.perform(post("/auth/logout").header("Authorization", other)).andExpect(status().isNoContent());
+		mvc.perform(get("/auth/me").header("Authorization", other)).andExpect(status().isUnauthorized());
+	}
+
+	@Test
 	void adminCanBuildAndReadAnOrgChart() throws Exception {
 
 		String token = call(post("/auth/login").contentType(MediaType.APPLICATION_JSON)

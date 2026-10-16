@@ -1,5 +1,6 @@
 package com.example.neo4j.entity;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,4 +34,7 @@ public class AppUser {
     // The employee this login belongs to (optional). Managers get rights over the
     // people who report to this employee. Unique - see migration V0003.
     private String employeeId;
+
+    // Access tokens issued before this are refused: set at logout and when sessions are revoked.
+    private Instant tokensValidAfter;
 }

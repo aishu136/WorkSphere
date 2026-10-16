@@ -39,6 +39,10 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
 - **Roles and manager self-service.** Roles are ADMIN, HR and EMPLOYEE. A login linked to an employee
   can manage that employee's team. The org chart decides who is in the team, so there is no separate
   manager role to keep in sync.
+- **Sessions and login protection.** Short-lived access tokens with refresh tokens that work once.
+  Logging out, revoking a login's sessions, or disabling a login (e.g. terminating the employee)
+  takes effect at once. Repeated failed logins lock the username or address out for a while. See
+  [Sessions and login protection](#sessions-and-login-protection).
 - **Audit trail.** Every change and every login attempt is recorded. Updates store only the fields
   that changed, with their before and after values. Each event is written in the same transaction as
   its change, and events can't be edited or deleted.
@@ -349,7 +353,8 @@ All secrets come from environment variables. None are stored in the repository.
 Other settings are in `src/main/resources/application.properties`:
 
 - server port: 8081
-- token lifetime: `app.jwt.expiry-minutes`, 60 by default
+- token lifetimes: `app.jwt.expiry-minutes` (15) and `app.jwt.refresh-days` (7)
+- failed-login limits: `app.auth.*`; see [Sessions and login protection](#sessions-and-login-protection)
 - allowed frontend origins: `app.cors.allowed-origins`, `http://localhost:4200` by default
 
 ### Run
@@ -376,8 +381,9 @@ The web app is at **http://localhost:8081/**. The interactive API docs are at
 ### First steps
 
 1. Log in: `POST /auth/login` with `{"username":"admin","password":"..."}`. The response contains an
-   `accessToken`.
-2. Send `Authorization: Bearer <accessToken>` with every other request.
+   `accessToken` and a `refreshToken`.
+2. Send `Authorization: Bearer <accessToken>` with every other request. When it expires, get a new one
+   with `POST /auth/refresh`.
 3. Create departments and employees.
 4. Create logins for your staff with `POST /users`. Pass an `employeeId` to link a login to an
    employee.
@@ -393,6 +399,32 @@ The web app is at **http://localhost:8081/**. The interactive API docs are at
 | **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Request and cancel their own leave. Use the AI assistant. |
 
 Managers can't edit their own record, and they can't reach anyone outside their reporting line.
+
+### Sessions and login protection
+
+- **Tokens.** `POST /auth/login` returns an `accessToken` (valid for `app.jwt.expiry-minutes`, 15 by
+  default) and a `refreshToken` (valid for `app.jwt.refresh-days`, 7 by default).
+- **Refreshing.** Before the access token expires, `POST /auth/refresh` with `{"refreshToken":"..."}`
+  returns a new pair. Each refresh token works **once**. Only a hash of it is stored, so the database
+  never holds a usable token. The web app does this for you.
+- **Reuse means theft.** If a refresh token that was already used comes back, two parties have it.
+  Every session of that login is revoked, so both have to log in again. This is recorded in the
+  audit trail as `REFRESH_TOKEN_REUSED`.
+- **Revoking access at once.** Every request's token is checked against its login. It's refused if:
+  - the login was disabled (terminating an employee disables theirs), or
+  - the token was issued before the login's last logout or session revocation.
+
+  This costs one lookup per request.
+  - `POST /auth/logout` logs you out everywhere.
+  - `DELETE /users/{id}/sessions` (ADMIN) does the same for someone else, e.g. after a lost laptop.
+- **Failed logins.** After `app.auth.max-failures-per-user` (5) failures for a username, or
+  `app.auth.max-failures-per-address` (20) from one address, within `app.auth.failure-window` (15
+  minutes), further attempts are refused with **429 Too Many Requests** and a `Retry-After` header.
+  This lasts for `app.auth.lockout` (15 minutes), even with the right password. Lockouts are recorded
+  as failed logins with reason `LOCKED_OUT`.
+  - The counts are kept in memory, so each instance counts on its own and a restart clears them.
+  - Behind a proxy, set `server.forward-headers-strategy` so the real client address is used.
+- Expired refresh tokens are deleted every night.
 
 ### Manager self-service notifications
 
@@ -419,10 +451,13 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/auth/login` | Log in and get a token. |
+| POST | `/auth/login` | Log in. Returns an access token and a refresh token. 429 after too many failures. |
+| POST | `/auth/refresh` | `{"refreshToken":"..."}`: a new access token and refresh token. Each refresh token works once. |
+| POST | `/auth/logout` | Log out everywhere: every token of this login stops working. |
 | GET | `/auth/me` | The current user: username, roles and linked `employeeId`. |
 | POST / GET | `/users` | Create a login, or list logins. ADMIN only. |
 | PUT / DELETE | `/users/{id}/employee/{employeeId}` | Link or unlink a login and an employee. ADMIN only. |
+| DELETE | `/users/{id}/sessions` | End every session of a login at once. ADMIN only. |
 
 ### Employees
 
@@ -576,7 +611,12 @@ database and one Spring context, so the database starts and the migrations run o
 back its own changes. Tests that need committed data or old-format data before migrations keep a
 database of their own. They cover:
 
-- **Web layer:** authentication, role and team permissions, validation and paging.
+- **Web layer:** authentication, role and team permissions, validation and paging. Lockout after
+  failed logins with `Retry-After`, refresh without an access token, logout, and revoked or disabled
+  logins losing access at once.
+- **Sessions:** refresh tokens working once and stored only as hashes, reuse revoking every session,
+  expired, unknown and disabled cases, logout and admin revocation, and cleanup. The lockout rules
+  are tested on their own with a controllable clock.
 - **Services:** reporting and department cycles, termination rules, directory filters, uniqueness.
 - **Projects and offices:** the 100% allocation limit, reopening checks, availability search, and
   how termination handles projects and offices.
@@ -633,9 +673,8 @@ src/main/resources/static/   The web app (index.html, app.js, app.css)
 
 ## Known limitations
 
-- **Revoking access.** Tokens can't be cancelled early. A terminated employee's existing token keeps
-  working for read-only endpoints until it expires (60 minutes by default). Their manager rights stop
-  immediately.
+- **Failed-login counts are per instance.** With several instances, each one counts on its own, so
+  an attacker spreading guesses across instances gets proportionally more tries.
 - **Companies.** There's no API to create companies yet. Assigning an existing company works.
 - **Emails can occasionally be sent twice.** Delivery is at least once (see
   [Email outbox and retries](#email-outbox-and-retries)).

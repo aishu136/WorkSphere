@@ -19,8 +19,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.LocalDate;
+import java.util.Optional;
 import java.util.List;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -61,17 +63,23 @@ import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.dto.LeaveFilter;
 import com.example.neo4j.dto.SkillRequest;
+import com.example.neo4j.dto.TokenResponse;
+import com.example.neo4j.entity.AppUser;
 import com.example.neo4j.entity.EmploymentStatus;
 import com.example.neo4j.entity.LeaveStatus;
 import com.example.neo4j.entity.LeaveType;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.outbox.OutboxController;
 import com.example.neo4j.outbox.OutboxService;
+import com.example.neo4j.repository.AppUserRepository;
 import com.example.neo4j.repository.EmployeeQueries;
 import com.example.neo4j.repository.ProjectQueries;
+import com.example.neo4j.security.LoginAttempts;
 import com.example.neo4j.security.SecurityConfig;
+import com.example.neo4j.security.SessionService;
 import com.example.neo4j.security.TeamAuthorization;
 import com.example.neo4j.security.TokenService;
+import com.example.neo4j.security.TokenValidity;
 import com.example.neo4j.service.AnalyticsService;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
@@ -87,12 +95,34 @@ import com.fasterxml.jackson.databind.ObjectMapper;
         UserController.class, AuditController.class, OfficeController.class, ProjectController.class,
         StaffingRequestController.class, OutboxController.class, LeaveController.class,
         AnalyticsController.class, OrgHistoryController.class})
-@Import({SecurityConfig.class, TokenService.class, TeamAuthorization.class})
+@Import({SecurityConfig.class, TokenService.class, TeamAuthorization.class, TokenValidity.class,
+        LoginAttempts.class})
 @TestPropertySource(properties = {
         "app.jwt.secret=test-secret-that-is-at-least-32-bytes-long",
         "app.cors.allowed-origins=http://localhost:4200"
 })
 class SecurityAndDtoTests {
+
+    // Backs TokenValidity: every real token is checked against its login.
+    @MockitoBean
+    AppUserRepository appUserRepository;
+
+    @MockitoBean
+    SessionService sessionService;
+
+    @Autowired
+    LoginAttempts loginAttempts;
+
+    @BeforeEach
+    void enabledLoginsAndFreshAttempts() {
+        loginAttempts.clear();
+        when(appUserRepository.findByUsername(any())).thenAnswer(invocation -> {
+            AppUser user = new AppUser();
+            user.setUsername(invocation.getArgument(0));
+            return Optional.of(user);
+        });
+        when(sessionService.create(any())).thenReturn(new SessionService.IssuedRefreshToken("refresh-1", 604800));
+    }
 
     @Autowired
     MockMvc mvc;
@@ -837,5 +867,91 @@ class SecurityAndDtoTests {
                 .andExpect(status().isOk());
         mvc.perform(get("/employees/report/reports-on").param("date", "not-a-date").with(manager()))
                 .andExpect(status().isBadRequest());
+    }
+
+    // ---- Sessions and login limits -------------------------------------------------
+
+    private void givenHrUser() {
+        when(userDetailsService.loadUserByUsername(eq("hr.user"))).thenAnswer(invocation ->
+                User.withUsername("hr.user").password(passwordEncoder.encode("correct-password")).roles("HR").build());
+    }
+
+    private org.springframework.test.web.servlet.ResultActions login(String password) throws Exception {
+        return mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"hr.user\",\"password\":\"" + password + "\"}"));
+    }
+
+    @Test
+    void loginReturnsARefreshTokenToo() throws Exception {
+        givenHrUser();
+
+        login("correct-password").andExpect(status().isOk())
+                .andExpect(jsonPath("$.refreshToken").value("refresh-1"))
+                .andExpect(jsonPath("$.refreshExpiresIn").value(604800));
+        verify(sessionService).create("hr.user");
+    }
+
+    @Test
+    void tooManyFailedLoginsLockTheUsernameOut() throws Exception {
+        givenHrUser();
+        for (int i = 0; i < 5; i++) {
+            login("wrong").andExpect(status().isUnauthorized());
+        }
+
+        // Even the right password is refused while locked out.
+        login("correct-password")
+                .andExpect(status().isTooManyRequests())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Retry-After", org.hamcrest.Matchers.matchesPattern("89[5-9]|900")))
+                .andExpect(content().string(containsString("Try again in 15 minute(s)")));
+        verify(auditLog).recordAs("hr.user", AuditAction.LOGIN_FAILED, AuditTargetType.USER, "hr.user",
+                java.util.Map.of("reason", "LOCKED_OUT"));
+    }
+
+    @Test
+    void refreshNeedsNoAccessTokenButLogoutDoes() throws Exception {
+        when(sessionService.refresh("refresh-1")).thenReturn(new TokenResponse("access-2", "Bearer", 900, "refresh-2",
+                604800));
+
+        mvc.perform(post("/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\":\"refresh-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refreshToken").value("refresh-2"));
+        mvc.perform(post("/auth/refresh").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/auth/logout")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/auth/logout").with(manager())).andExpect(status().isNoContent());
+        verify(sessionService).logout("mgr");
+    }
+
+    @Test
+    void revokedOrDisabledLoginsLoseAccessAtOnce() throws Exception {
+        givenHrUser();
+        String token = json.readTree(login("correct-password").andReturn().getResponse().getContentAsString())
+                .get("accessToken").asText();
+        mvc.perform(get("/auth/me").header("Authorization", "Bearer " + token)).andExpect(status().isOk());
+
+        // Logged out (or sessions revoked) after the token was issued.
+        AppUser revoked = new AppUser();
+        revoked.setUsername("hr.user");
+        revoked.setTokensValidAfter(java.time.Instant.now().plusSeconds(5));
+        when(appUserRepository.findByUsername("hr.user")).thenReturn(Optional.of(revoked));
+        mvc.perform(get("/auth/me").header("Authorization", "Bearer " + token)).andExpect(status().isUnauthorized());
+
+        // Disabled, e.g. the employee was terminated.
+        AppUser disabled = new AppUser();
+        disabled.setUsername("hr.user");
+        disabled.setEnabled(false);
+        when(appUserRepository.findByUsername("hr.user")).thenReturn(Optional.of(disabled));
+        mvc.perform(get("/auth/me").header("Authorization", "Bearer " + token)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void onlyAdminsRevokeOtherPeoplesSessions() throws Exception {
+        mvc.perform(delete("/users/u1/sessions").with(jwt().authorities(role("HR")))).andExpect(status().isForbidden());
+        mvc.perform(delete("/users/u1/sessions").with(jwt().authorities(role("ADMIN"))))
+                .andExpect(status().isNoContent());
+        verify(sessionService).revokeSessions("u1");
     }
 }

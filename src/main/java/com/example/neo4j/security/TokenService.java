@@ -31,7 +31,8 @@ public class TokenService {
         this.expiry = Duration.ofMinutes(expiryMinutes);
     }
 
-    public TokenResponse issue(Authentication authentication) {
+    /** An access token for the authenticated user, returned with their new refresh token. */
+    public TokenResponse issue(Authentication authentication, SessionService.IssuedRefreshToken refresh) {
 
         Instant now = Instant.now();
 
@@ -53,6 +54,6 @@ public class TokenService {
 
         String token = encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
 
-        return new TokenResponse(token, "Bearer", expiry.toSeconds());
+        return new TokenResponse(token, "Bearer", expiry.toSeconds(), refresh.value(), refresh.expiresInSeconds());
     }
 }

@@ -1,4 +1,6 @@
 package com.example.neo4j.dto;
 
-public record TokenResponse(String accessToken, String tokenType, long expiresIn) {
+// expiresIn and refreshExpiresIn are in seconds. Send refreshToken to /auth/refresh for a new pair.
+public record TokenResponse(String accessToken, String tokenType, long expiresIn, String refreshToken,
+                            long refreshExpiresIn) {
 }
