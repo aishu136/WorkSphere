@@ -134,15 +134,15 @@ class AnalyticsTests extends SharedNeo4jTest {
 
         String payroll = project("PAYROLL", ProjectStatus.ACTIVE, engineering,
                 new SkillRequest("Java", 3), new SkillRequest("Kafka", 3));
-        projects.assign(payroll, dev1, new AssignmentRequest("Dev", 50, null, null));
-        projects.assign(payroll, dev2, new AssignmentRequest("Dev", 50, null, null));
+        projects.assign(payroll, dev1, new AssignmentRequest("Dev", 50, null, null, null));
+        projects.assign(payroll, dev2, new AssignmentRequest("Dev", 50, null, null, null));
         // Dev3's assignment has ended, so their Kafka doesn't count.
         projects.assign(payroll, dev3, new AssignmentRequest("Dev", 50, LocalDate.now().minusMonths(2),
-                LocalDate.now().minusDays(1)));
+                LocalDate.now().minusDays(1), null));
 
         String safe = project("SAFE", ProjectStatus.ACTIVE, engineering, new SkillRequest("Java", 3));
-        projects.assign(safe, dev1, new AssignmentRequest("Dev", 25, null, null));
-        projects.assign(safe, dev2, new AssignmentRequest("Dev", 25, null, null));
+        projects.assign(safe, dev1, new AssignmentRequest("Dev", 25, null, null, null));
+        projects.assign(safe, dev2, new AssignmentRequest("Dev", 25, null, null, null));
 
         project("NEW", ProjectStatus.PLANNED, null, new SkillRequest("Go", 2));
         project("DONE", ProjectStatus.COMPLETED, null, new SkillRequest("Go", 2));

@@ -51,7 +51,7 @@ class AllocationOverTimeTests extends SharedNeo4jTest {
 
     private ProjectMemberResponse assign(String projectId, String employeeId, int allocation, LocalDate start,
                                          LocalDate end) {
-        return projects.assign(projectId, employeeId, new AssignmentRequest("Dev", allocation, start, end));
+        return projects.assign(projectId, employeeId, new AssignmentRequest("Dev", allocation, start, end, null));
     }
 
     @Test
@@ -97,6 +97,26 @@ class AllocationOverTimeTests extends SharedNeo4jTest {
         assertThat(assign(dated, dev, 40, null, day(3, 31)).endDate()).isEqualTo(day(3, 31));
 
         assertThatThrownBy(() -> assign(dated, dev, 40, day(4, 1), day(3, 1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void anEndDateCanBeRemoved() {
+        String dev = hire("DEV");
+        String dated = project("DATED", day(2, 1), day(5, 31));
+
+        // New, open-ended despite the project's end date.
+        assertThat(projects.assign(dated, dev, new AssignmentRequest("Dev", 50, null, null, true)).endDate()).isNull();
+
+        // Given an end date, then open-ended again; the start date is kept.
+        assertThat(assign(dated, dev, 50, null, day(3, 31)).endDate()).isEqualTo(day(3, 31));
+        ProjectMemberResponse reopened = projects.assign(dated, dev, new AssignmentRequest("Dev", 50, null, null, true));
+        assertThat(reopened.endDate()).isNull();
+        assertThat(reopened.startDate()).isEqualTo(day(2, 1));
+
+        // Leaving it out keeps it open-ended; both at once is refused.
+        assertThat(assign(dated, dev, 40, null, null).endDate()).isNull();
+        assertThatThrownBy(() -> projects.assign(dated, dev, new AssignmentRequest("Dev", 50, null, day(4, 1), true)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

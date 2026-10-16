@@ -86,7 +86,8 @@ in the `*Queries` classes. That way, loading one employee never loads the rest o
   count as **open**.
 - Each assignment runs from `startDate` to `endDate`, both inclusive. With no `endDate` it is
   open-ended. When someone joins, the dates default to the project's dates, starting no earlier than
-  today. When an assignment is changed, a date that is left out keeps its current value. `since` is
+  today. When an assignment is changed, a date that is left out keeps its current value.
+  `"openEnded": true` removes the end date, even if the project has one. `since` is
   the day they were added. Assignments made before dates existed start on that day (migration V0010).
 - **On any day**, the sum of `allocationPercent` over the open-project assignments running that day
   can't exceed 100%. This is checked when someone joins a project, when their allocation or dates
@@ -478,7 +479,7 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | PUT / DELETE | `/projects/{id}/lead/{employeeId}` | Set or remove the project lead. |
 | PUT / DELETE | `/projects/{id}/department/{departmentId}` | Set or remove the owning department. |
 | GET | `/projects/{id}/members` | Who is on the project, with role and allocation. |
-| PUT | `/projects/{id}/members/{employeeId}` | Add someone, or change their role, allocation or dates: `{"role":"...","allocationPercent":50,"startDate":"2026-11-01","endDate":"2027-03-31"}`. The dates are optional. |
+| PUT | `/projects/{id}/members/{employeeId}` | Add someone, or change their role, allocation or dates: `{"role":"...","allocationPercent":50,"startDate":"2026-11-01","endDate":"2027-03-31"}`. The dates are optional; `"openEnded":true` removes the end date. |
 | DELETE | `/projects/{id}/members/{employeeId}` | Remove someone from the project. |
 | POST / PUT | `/projects/{id}/skills` | Add one required skill or change its minimum level, or replace them all. HR or the project lead. |
 | DELETE | `/projects/{id}/skills/{skillId}` | Remove a required skill. HR or the project lead. |

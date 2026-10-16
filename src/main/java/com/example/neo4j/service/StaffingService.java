@@ -120,7 +120,7 @@ public class StaffingService {
 			}
 			// The same dates and per-day check the assignment will get on approval.
 			ProjectService.DateRange dates = projectService.assignmentDates(project,
-					projectQueries.member(projectId, employee.getId()), request.startDate(), request.endDate());
+					projectQueries.member(projectId, employee.getId()), request.startDate(), request.endDate(), false);
 			projectService.requireCapacity(employee, projectId, request.allocationPercent(), dates);
 		} else if (!onProject) {
 			throw new ConflictException(employee.getName() + " is not on this project");
@@ -177,7 +177,7 @@ public class StaffingService {
 		if (request.getAction() == StaffingAction.ASSIGN) {
 			projectService.assign(request.getProjectId(), request.getEmployeeId(),
 					new AssignmentRequest(request.getRole(), request.getAllocationPercent(), request.getStartDate(),
-							request.getEndDate()));
+							request.getEndDate(), null));
 		} else {
 			projectService.unassign(request.getProjectId(), request.getEmployeeId());
 		}

@@ -180,7 +180,7 @@ class SkillMatchingTests extends SharedNeo4jTest {
         String insider = hire("IN", "Insider");
         skills(insider, skill("Java", 4), skill("Kafka", 3));
         employees.assignDepartment(insider, platform);
-        projects.assign(other, insider, new AssignmentRequest("Dev", 50, null, null));
+        projects.assign(other, insider, new AssignmentRequest("Dev", 50, null, null, null));
 
         // Exceeds both levels, outside the department, fully free.
         String expert = hire("EX", "Expert");
@@ -194,10 +194,10 @@ class SkillMatchingTests extends SharedNeo4jTest {
         // Left out: fully booked, already on the project, on leave, no required skill.
         String busy = hire("BU", "Busy");
         skills(busy, skill("Java", 5), skill("Kafka", 5));
-        projects.assign(other, busy, new AssignmentRequest("Dev", 100, null, null));
+        projects.assign(other, busy, new AssignmentRequest("Dev", 100, null, null, null));
         String member = hire("ME", "Member");
         skills(member, skill("Java", 5));
-        projects.assign(payroll, member, new AssignmentRequest("Dev", 20, null, null));
+        projects.assign(payroll, member, new AssignmentRequest("Dev", 20, null, null, null));
         String away = hire("AW", "Away");
         skills(away, skill("Java", 5));
         employees.changeStatus(away, EmploymentStatus.ON_LEAVE);
@@ -256,12 +256,12 @@ class SkillMatchingTests extends SharedNeo4jTest {
         // Fully booked from the third week: no capacity during the project.
         String bookedLater = hire("BL", "Booked Later");
         skills(bookedLater, skill("Java", 4));
-        projects.assign(other, bookedLater, new AssignmentRequest("Dev", 100, start.plusWeeks(2), null));
+        projects.assign(other, bookedLater, new AssignmentRequest("Dev", 100, start.plusWeeks(2), null, null));
 
         // Fully booked until just before the project: free for all of it.
         String bookedBefore = hire("BB", "Booked Before");
         skills(bookedBefore, skill("Java", 4));
-        projects.assign(other, bookedBefore, new AssignmentRequest("Dev", 100, start.minusMonths(2), start.minusDays(3)));
+        projects.assign(other, bookedBefore, new AssignmentRequest("Dev", 100, start.minusMonths(2), start.minusDays(3), null));
 
         // Away the first two weeks (10 of 20 days), away all of it, and a week waiting for approval.
         String halfAway = hire("HA", "Half Away");

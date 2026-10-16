@@ -71,7 +71,7 @@ class ProjectsAndOfficesTests extends SharedNeo4jTest {
     }
 
     private void assign(String projectId, String employeeId, int allocation) {
-        projects.assign(projectId, employeeId, new AssignmentRequest("Developer", allocation, null, null));
+        projects.assign(projectId, employeeId, new AssignmentRequest("Developer", allocation, null, null, null));
     }
 
     private int allocationOf(String employeeId) {
@@ -227,7 +227,7 @@ class ProjectsAndOfficesTests extends SharedNeo4jTest {
                 null, null))).isInstanceOf(ConflictException.class);
 
         assign(p, dev, 50);
-        projects.assign(p, dev, new AssignmentRequest("Tech lead", 60, null, null));
+        projects.assign(p, dev, new AssignmentRequest("Tech lead", 60, null, null, null));
         assertThat(projects.members(p, FIRST_PAGE).getContent()).singleElement()
                 .satisfies(m -> {
                     assertThat(m.role()).isEqualTo("Tech lead");

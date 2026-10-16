@@ -11,7 +11,8 @@ import jakarta.validation.constraints.Size;
  * Adds someone to a project, or changes their role, allocation or dates on it.
  * Dates are inclusive. For someone new, they default to the project's dates, starting no earlier
  * than today, and a missing endDate means open-ended. For someone already on the project, a date
- * left out keeps its current value.
+ * left out keeps its current value. openEnded: true removes the end date, so the assignment runs
+ * until further notice even if the project or the current assignment has an end date.
  */
 public record AssignmentRequest(
 
@@ -27,5 +28,7 @@ public record AssignmentRequest(
 
         LocalDate startDate,
 
-        LocalDate endDate) {
+        LocalDate endDate,
+
+        Boolean openEnded) {
 }

@@ -417,7 +417,8 @@ public class ProjectService {
 		Employee employee = requireActiveEmployee(employeeId, "A terminated employee cannot join a project");
 
 		Optional<ProjectMemberResponse> previous = projectQueries.member(id, employeeId);
-		DateRange dates = assignmentDates(project, previous, request.startDate(), request.endDate());
+		DateRange dates = assignmentDates(project, previous, request.startDate(), request.endDate(),
+				Boolean.TRUE.equals(request.openEnded()));
 
 		int allocation = request.allocationPercent();
 		requireCapacity(employee, id, allocation, dates);
@@ -478,15 +479,20 @@ public class ProjectService {
 	/**
 	 * The dates an assignment gets. A requested date wins; otherwise someone already on the
 	 * project keeps their current date, and someone new gets the project's dates, starting no
-	 * earlier than today.
+	 * earlier than today. openEnded removes the end date.
 	 */
 	DateRange assignmentDates(Project project, Optional<ProjectMemberResponse> current, LocalDate requestedStart,
-			LocalDate requestedEnd) {
+			LocalDate requestedEnd, boolean openEnded) {
+
+		if (openEnded && requestedEnd != null) {
+			throw new IllegalArgumentException("Give an endDate or openEnded, not both");
+		}
 
 		LocalDate start = requestedStart != null ? requestedStart
 				: current.map(ProjectMemberResponse::startDate)
 						.orElseGet(() -> laterOf(LocalDate.now(), project.getStartDate()));
-		LocalDate end = requestedEnd != null ? requestedEnd
+		LocalDate end = openEnded ? null
+				: requestedEnd != null ? requestedEnd
 				: current.isPresent() ? current.get().endDate() : project.getEndDate();
 
 		if (end != null && end.isBefore(start)) {

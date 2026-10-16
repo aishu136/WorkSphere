@@ -197,7 +197,7 @@ class OutboxTests {
         StaffingRequestResponse pending = requestAssign(60);
         String other = projects.create(new CreateProjectRequest("OTHER", "Other", null, ProjectStatus.ACTIVE,
                 null, null, null, null)).id();
-        projects.assign(other, dev, new AssignmentRequest("Dev", 50, null, null));
+        projects.assign(other, dev, new AssignmentRequest("Dev", 50, null, null, null));
 
         // Approving would put Dev at 110%, so the approval rolls back...
         assertThatThrownBy(() -> staffing.approve(pending.id(), "hr.user")).isInstanceOf(ConflictException.class);
