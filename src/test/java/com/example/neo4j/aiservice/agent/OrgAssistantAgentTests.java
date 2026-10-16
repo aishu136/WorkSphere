@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -25,15 +26,21 @@ import com.example.neo4j.dto.AIRequest;
 import com.example.neo4j.dto.AIResponse;
 import com.example.neo4j.dto.EmployeeFilter;
 import com.example.neo4j.dto.EmployeeSummary;
+import com.example.neo4j.dto.LeaveBalanceResponse;
+import com.example.neo4j.dto.LeaveFilter;
+import com.example.neo4j.dto.LeaveRequestResponse;
 import com.example.neo4j.dto.ProjectSummary;
 import com.example.neo4j.dto.SkillCount;
 import com.example.neo4j.dto.StaffingRequestResponse;
+import com.example.neo4j.entity.LeaveStatus;
+import com.example.neo4j.entity.LeaveType;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.entity.StaffingAction;
 import com.example.neo4j.entity.StaffingRequestStatus;
 import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
+import com.example.neo4j.service.LeaveService;
 import com.example.neo4j.service.OfficeService;
 import com.example.neo4j.service.ProjectService;
 import com.example.neo4j.service.StaffingService;
@@ -105,6 +112,7 @@ class OrgAssistantAgentTests {
     private OfficeService offices;
     private ProjectService projects;
     private StaffingService staffing;
+    private LeaveService leave;
     private ConversationStore conversations;
     private ScriptedChatModel model;
 
@@ -115,6 +123,7 @@ class OrgAssistantAgentTests {
         offices = mock(OfficeService.class);
         projects = mock(ProjectService.class);
         staffing = mock(StaffingService.class);
+        leave = mock(LeaveService.class);
         conversations = new ConversationStore(Duration.ofMinutes(30), 100);
         model = new ScriptedChatModel();
     }
@@ -124,7 +133,7 @@ class OrgAssistantAgentTests {
     }
 
     private OrgAssistantAgent agent(Duration timeBudget) throws Exception {
-        return new OrgAssistantAgent(model, new OrgTools(employees, departments, offices, projects, staffing),
+        return new OrgAssistantAgent(model, new OrgTools(employees, departments, offices, projects, staffing, leave),
                 conversations, timeBudget);
     }
 
@@ -145,7 +154,8 @@ class OrgAssistantAgentTests {
                 .containsExactlyInAnyOrder("searchEmployees", "getEmployee", "getReportingChain",
                         "getDirectReports", "getAllReports", "findDepartments", "getDepartmentMembers",
                         "findOffices", "findProjects", "getProjectMembers", "getEmployeeProjects",
-                        "findCandidatesForProject", "findSkills", "getStaffingRequests");
+                        "findCandidatesForProject", "findSkills", "getStaffingRequests", "findLeave",
+                        "getLeaveBalance");
 
         // The caller is passed in by the agent, never offered to the model as an argument.
         ToolSpecification staffingTool = first.toolSpecifications().stream()
@@ -380,6 +390,79 @@ class OrgAssistantAgentTests {
         assertThat(results.get(2).text()).startsWith("Error:").contains("projects you lead");
         verify(staffing, never()).search(eq("other"), any(), any());
         verify(staffing, never()).search(eq(null), any(), any());
+    }
+
+    // ---- Leave tools -----------------------------------------------------------------
+
+    private static LeaveRequestResponse leaveOf(String name, LeaveStatus status, LocalDate start) {
+        return new LeaveRequestResponse("l-" + name, new EmployeeSummary("e-" + name, name, "Engineer"),
+                LeaveType.ANNUAL, start, start.plusDays(4), 5, null, status, name, Instant.parse("2030-01-01T09:00:00Z"),
+                null, null, null);
+    }
+
+    private static <T> PageImpl<T> pageOf(List<T> items) {
+        return new PageImpl<>(items, PageRequest.of(0, 100), items.size());
+    }
+
+    @Test
+    void employeesSeeTheirOwnAndTheirTeamsLeave() throws Exception {
+        LocalDate monday = LocalDate.of(2030, 3, 4);
+        when(leave.employeeIdOf("emma")).thenReturn(java.util.Optional.of("e-emma"));
+        when(leave.mine(eq("emma"), any(), any())).thenReturn(pageOf(List.of(leaveOf("Emma", LeaveStatus.APPROVED, monday))));
+        when(leave.team(eq("emma"), any(), any())).thenReturn(pageOf(List.of(
+                leaveOf("Dev Kumar", LeaveStatus.PENDING, monday.minusDays(7)),
+                leaveOf("Rejected Rita", LeaveStatus.REJECTED, monday))));
+
+        model.then(request -> callTool("l", "findLeave", "{\"from\":\"2030-03-04\",\"to\":\"2030-03-08\"}"))
+                .then(request -> AiMessage.from("done"));
+        ask(agent(), question(null, "Who is away next week?"));
+
+        String result = toolResults(model.requests.get(1)).get(0).text();
+        // Pending and approved only, earliest first.
+        assertThat(result).contains("\"total\":2").doesNotContain("Rejected Rita");
+        assertThat(result.indexOf("Dev Kumar")).isLessThan(result.indexOf("Emma"));
+        verify(leave).team("emma", new LeaveFilter(null, null, monday, monday.plusDays(4)), PageRequest.of(0, 100));
+        verify(leave, never()).search(any(), any());
+    }
+
+    @Test
+    void leaveOutsideYourTeamIsRefusedButHrSeesEveryone() throws Exception {
+        when(leave.canSeeLeaveOf("emma", "e-other")).thenReturn(false);
+        when(leave.search(any(), any())).thenReturn(pageOf(List.of(leaveOf("Other Person", LeaveStatus.APPROVED,
+                LocalDate.of(2030, 3, 4)))));
+
+        model.then(request -> callTool("a", "findLeave", "{\"employeeId\":\"e-other\"}"))
+                .then(request -> callTool("b", "getLeaveBalance", "{\"employeeId\":\"e-other\"}"))
+                .then(request -> AiMessage.from("done"));
+        ask(agent(), question(null, "When is Other away?"));
+
+        List<ToolExecutionResultMessage> results = toolResults(model.requests.get(2));
+        assertThat(results.get(0).text()).startsWith("Error:").contains("your own leave");
+        assertThat(results.get(1).text()).startsWith("Error:").contains("your own leave balance");
+        verify(leave, never()).balance(any(), org.mockito.ArgumentMatchers.anyInt());
+
+        model.then(request -> callTool("c", "findLeave", "{\"employeeId\":\"e-other\"}"))
+                .then(request -> AiMessage.from("done"));
+        agent().ask(question(null, "When is Other away?"), HR);
+        assertThat(toolResults(model.requests.get(4)).get(0).text()).contains("Other Person");
+    }
+
+    @Test
+    void theBalanceDefaultsToYourOwn() throws Exception {
+        when(leave.employeeIdOf("emma")).thenReturn(java.util.Optional.of("e-emma"));
+        when(leave.canSeeLeaveOf("emma", "e-emma")).thenReturn(true);
+        when(leave.balance("e-emma", 2030)).thenReturn(new LeaveBalanceResponse("e-emma", 2030, 20, 5, 2, 13));
+
+        model.then(request -> callTool("b", "getLeaveBalance", "{\"year\":2030}"))
+                .then(request -> AiMessage.from("done"));
+        ask(agent(), question(null, "How much leave do I have left?"));
+
+        assertThat(toolResults(model.requests.get(1)).get(0).text()).contains("\"remainingDays\":13");
+    }
+
+    @Test
+    void theModelIsToldTodaysDate() {
+        assertThat(OrgAssistantAgent.todayLine(LocalDate.of(2030, 3, 4))).isEqualTo("\nToday is Monday 2030-03-04.");
     }
 
     private static AIRequest followUp(String conversationId, String text) {

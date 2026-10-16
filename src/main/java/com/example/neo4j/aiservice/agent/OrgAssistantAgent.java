@@ -8,9 +8,12 @@ import static org.bsc.langgraph4j.prebuilt.MessagesState.MESSAGES_STATE;
 
 import java.lang.reflect.Method;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -79,7 +82,7 @@ public class OrgAssistantAgent {
 
     static final String SYSTEM_PROMPT = """
             You are the WorkSphere directory assistant. You answer questions about employees, managers,
-            reporting lines, teams, departments, offices, projects, skills and staffing requests.
+            reporting lines, teams, departments, offices, projects, skills, staffing requests and leave.
 
             Rules:
             - Use the tools to look information up. Never guess or invent people, job titles or relationships.
@@ -93,6 +96,8 @@ public class OrgAssistantAgent {
             - To search by skill, use findSkills first to get the exact skill name.
             - Skill levels go from 1 (beginner) to 5 (expert).
             - To suggest who could join or staff a project, use findCandidatesForProject.
+            - For time off ("who is away next week", "how much leave do I have"), use findLeave and
+              getLeaveBalance. Work out dates from today's date, which is given below.
             - If a list was cut short (showing is less than total), say so.
             - Answer in plain English and keep it short. Don't show internal ids unless asked.
             """;
@@ -182,10 +187,15 @@ public class OrgAssistantAgent {
                 .build());
     }
 
+    // So the model can turn "next week" into dates for the leave tools.
+    static String todayLine(LocalDate today) {
+        return "\nToday is " + today.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.ENGLISH) + " " + today + ".";
+    }
+
     private Map<String, Object> callModel(AssistantState state) {
 
         List<ChatMessage> conversation = new ArrayList<>();
-        conversation.add(SystemMessage.from(SYSTEM_PROMPT));
+        conversation.add(SystemMessage.from(SYSTEM_PROMPT + todayLine(LocalDate.now())));
         conversation.addAll(state.messages());
 
         AiMessage reply = chatModel.chat(ChatRequest.builder()

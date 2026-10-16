@@ -2,10 +2,13 @@ package com.example.neo4j.aiservice.agent;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -16,11 +19,16 @@ import com.example.neo4j.dto.DepartmentResponse;
 import com.example.neo4j.dto.EmployeeFilter;
 import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.EmployeeProjectsResponse;
+import com.example.neo4j.dto.LeaveBalanceResponse;
+import com.example.neo4j.dto.LeaveFilter;
+import com.example.neo4j.dto.LeaveRequestResponse;
 import com.example.neo4j.entity.EmploymentStatus;
+import com.example.neo4j.entity.LeaveStatus;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.entity.StaffingRequestStatus;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
+import com.example.neo4j.service.LeaveService;
 import com.example.neo4j.service.OfficeService;
 import com.example.neo4j.service.ProjectService;
 import com.example.neo4j.service.StaffingService;
@@ -33,8 +41,8 @@ import dev.langchain4j.invocation.InvocationParameters;
  * Tools the AI assistant can call. They are deliberately read-only and limited to data the caller
  * can already read through the API, so the assistant can never change anything or reveal more
  * than the caller could see anyway. Most tools cover data every logged-in user can read
- * (directory, org chart, departments, offices, projects, skills); staffing requests are checked
- * against the {@link Caller} with the same rule as the REST endpoints.
+ * (directory, org chart, departments, offices, projects, skills); staffing requests and leave are
+ * checked against the {@link Caller} with the same rules as the REST endpoints.
  * Audit history is intentionally not exposed.
  *
  * Results are capped so a single call can't flood the model's context.
@@ -44,6 +52,8 @@ public class OrgTools {
 
     static final int MAX_RESULTS = 20;
     static final int MAX_LIST_RESULTS = 50;
+    // Leave requests read per list before filtering by status.
+    private static final int LEAVE_SCANNED = 100;
     private static final int MAX_DEPARTMENTS_SCANNED = 100;
 
     private final EmployeeService employees;
@@ -51,14 +61,16 @@ public class OrgTools {
     private final OfficeService offices;
     private final ProjectService projects;
     private final StaffingService staffing;
+    private final LeaveService leave;
 
     public OrgTools(EmployeeService employees, DepartmentService departments, OfficeService offices,
-                    ProjectService projects, StaffingService staffing) {
+                    ProjectService projects, StaffingService staffing, LeaveService leave) {
         this.employees = employees;
         this.departments = departments;
         this.offices = offices;
         this.projects = projects;
         this.staffing = staffing;
+        this.leave = leave;
     }
 
     @Tool("Search the employee directory. All filters are optional and combine with AND. "
@@ -223,6 +235,65 @@ public class OrgTools {
         return listResult(page.getTotalElements(), page.getContent());
     }
 
+    @Tool("Find leave (time off): who is away and when. Without employeeId it covers the caller's own leave "
+            + "and everyone below them in the org chart; HR sees everyone's. from and to find leave that "
+            + "overlaps those dates, e.g. next week. Without a status it returns pending and approved leave.")
+    public Map<String, Object> findLeave(
+            @P(value = "Only this employee's leave (use searchEmployees to get the id)", required = false)
+            String employeeId,
+            @P(value = "First day, YYYY-MM-DD", required = false) String from,
+            @P(value = "Last day, YYYY-MM-DD", required = false) String to,
+            @P(value = "PENDING, APPROVED, REJECTED or CANCELLED", required = false) String status,
+            InvocationParameters parameters) {
+
+        Caller caller = callerOf(parameters);
+        String employee = blankToNull(employeeId);
+        LeaveStatus leaveStatus = parseLeaveStatus(status);
+        LeaveFilter filter = new LeaveFilter(employee, leaveStatus, parseDate(from), parseDate(to));
+        PageRequest page = PageRequest.of(0, LEAVE_SCANNED);
+
+        // Same rule as the API: HR sees everyone; others see their own leave and their team's.
+        List<LeaveRequestResponse> found = new ArrayList<>();
+        if (caller.hrOrAdmin()) {
+            found.addAll(leave.search(filter, page).getContent());
+        } else {
+            if (employee != null && !leave.canSeeLeaveOf(caller.username(), employee)) {
+                throw new AccessDeniedException("You can only see your own leave and your team's.");
+            }
+            Optional<String> own = leave.employeeIdOf(caller.username());
+            if (own.isPresent() && (employee == null || employee.equals(own.get()))) {
+                found.addAll(leave.mine(caller.username(), filter, page).getContent());
+            }
+            if (own.isPresent()) {
+                found.addAll(leave.team(caller.username(), filter, page).getContent());
+            }
+        }
+
+        List<Map<String, Object>> results = found.stream()
+                .filter(l -> leaveStatus != null || l.status() == LeaveStatus.PENDING || l.status() == LeaveStatus.APPROVED)
+                .sorted(Comparator.comparing(LeaveRequestResponse::startDate))
+                .map(OrgTools::brief)
+                .toList();
+        return listResult(results.size(), results.stream().limit(MAX_LIST_RESULTS).toList());
+    }
+
+    @Tool("Get someone's annual leave balance for a year: allowance, approved, pending and remaining working "
+            + "days. Without employeeId, the caller's own. Only the employee, a manager above them, or HR can see it.")
+    public LeaveBalanceResponse getLeaveBalance(
+            @P(value = "Employee id; leave empty for your own", required = false) String employeeId,
+            @P(value = "Calendar year, e.g. 2026; leave empty for this year", required = false) Integer year,
+            InvocationParameters parameters) {
+
+        Caller caller = callerOf(parameters);
+        String employee = blankToNull(employeeId) != null ? employeeId
+                : leave.employeeIdOf(caller.username()).orElseThrow(() ->
+                        new IllegalArgumentException("Your login is not linked to an employee; give an employeeId."));
+        if (!caller.hrOrAdmin() && !leave.canSeeLeaveOf(caller.username(), employee)) {
+            throw new AccessDeniedException("You can only see your own leave balance and your team's.");
+        }
+        return leave.balance(employee, year == null ? LocalDate.now().getYear() : year);
+    }
+
     // ---- Helpers ----------------------------------------------------------
 
     // Tells the model when a list was cut short, so it doesn't present a partial list as complete.
@@ -278,6 +349,37 @@ public class OrgTools {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Unknown project status '" + status
                     + "'. Use PLANNED, ACTIVE, ON_HOLD, COMPLETED or CANCELLED.");
+        }
+    }
+
+    private static Caller callerOf(InvocationParameters parameters) {
+        Caller caller = parameters == null ? null : parameters.get(Caller.PARAMETER);
+        if (caller == null) {
+            throw new AccessDeniedException("Unknown caller");
+        }
+        return caller;
+    }
+
+    private static Map<String, Object> brief(LeaveRequestResponse l) {
+        Map<String, Object> brief = new LinkedHashMap<>();
+        brief.put("employee", l.employee() == null ? null : l.employee().name());
+        brief.put("type", l.type());
+        brief.put("startDate", l.startDate());
+        brief.put("endDate", l.endDate());
+        brief.put("workingDays", l.workingDays());
+        brief.put("status", l.status());
+        return brief;
+    }
+
+    private static LeaveStatus parseLeaveStatus(String status) {
+        if (blankToNull(status) == null) {
+            return null;
+        }
+        try {
+            return LeaveStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Unknown leave status '" + status
+                    + "'. Use PENDING, APPROVED, REJECTED or CANCELLED.");
         }
     }
 

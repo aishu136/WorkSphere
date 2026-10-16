@@ -43,11 +43,13 @@ import com.example.neo4j.audit.AuditController;
 import com.example.neo4j.audit.AuditFilter;
 import com.example.neo4j.audit.AuditLog;
 import com.example.neo4j.audit.AuditTargetType;
+import com.example.neo4j.controller.AnalyticsController;
 import com.example.neo4j.controller.AuthController;
 import com.example.neo4j.controller.DepartmentController;
 import com.example.neo4j.controller.EmployeeController;
 import com.example.neo4j.controller.LeaveController;
 import com.example.neo4j.controller.OfficeController;
+import com.example.neo4j.controller.OrgHistoryController;
 import com.example.neo4j.controller.ProjectController;
 import com.example.neo4j.controller.StaffingRequestController;
 import com.example.neo4j.controller.UserController;
@@ -70,10 +72,12 @@ import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.security.SecurityConfig;
 import com.example.neo4j.security.TeamAuthorization;
 import com.example.neo4j.security.TokenService;
+import com.example.neo4j.service.AnalyticsService;
 import com.example.neo4j.service.DepartmentService;
 import com.example.neo4j.service.EmployeeService;
 import com.example.neo4j.service.LeaveService;
 import com.example.neo4j.service.OfficeService;
+import com.example.neo4j.service.OrgHistoryService;
 import com.example.neo4j.service.ProjectService;
 import com.example.neo4j.service.StaffingService;
 import com.example.neo4j.service.UserService;
@@ -81,7 +85,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 @WebMvcTest(controllers = {EmployeeController.class, DepartmentController.class, AuthController.class,
         UserController.class, AuditController.class, OfficeController.class, ProjectController.class,
-        StaffingRequestController.class, OutboxController.class, LeaveController.class})
+        StaffingRequestController.class, OutboxController.class, LeaveController.class,
+        AnalyticsController.class, OrgHistoryController.class})
 @Import({SecurityConfig.class, TokenService.class, TeamAuthorization.class})
 @TestPropertySource(properties = {
         "app.jwt.secret=test-secret-that-is-at-least-32-bytes-long",
@@ -115,6 +120,12 @@ class SecurityAndDtoTests {
 
     @MockitoBean
     LeaveService leaveService;
+
+    @MockitoBean
+    AnalyticsService analyticsService;
+
+    @MockitoBean
+    OrgHistoryService orgHistoryService;
 
     @MockitoBean
     OutboxService outboxService;
@@ -794,5 +805,37 @@ class SecurityAndDtoTests {
         mvc.perform(get("/employees/stranger/leave-balance").with(manager())).andExpect(status().isForbidden());
         mvc.perform(get("/employees/stranger/leave-balance").with(jwt().authorities(role("HR"))))
                 .andExpect(status().isOk());
+    }
+
+    // ---- Analytics and org history -----------------------------------------------
+
+    @Test
+    void analyticsAreForHrAndAdminOnly() throws Exception {
+        when(analyticsService.managers(any(Pageable.class))).thenReturn(Page.empty());
+
+        for (String path : List.of("/analytics/overview", "/analytics/managers", "/analytics/project-skill-risks",
+                "/analytics/skill-gaps")) {
+            mvc.perform(get(path).with(manager())).andExpect(status().isForbidden());
+            mvc.perform(get(path).with(jwt().authorities(role("HR")))).andExpect(status().isOk());
+        }
+        mvc.perform(get("/analytics/project-skill-risks").param("atRiskOnly", "false").with(jwt().authorities(role("ADMIN"))))
+                .andExpect(status().isOk());
+        verify(analyticsService).projectSkillRisks(false);
+    }
+
+    @Test
+    void reportingHistoryIsForTheEmployeeTheirManagersAndHr() throws Exception {
+        when(employeeQueries.isInTeamOf("mgr", "report", true)).thenReturn(true);
+
+        mvc.perform(get("/employees/report/reporting-history").with(manager())).andExpect(status().isOk());
+        mvc.perform(get("/employees/report/reports-on").param("date", "2026-03-15").with(manager()))
+                .andExpect(status().isOk());
+        verify(orgHistoryService).reportsOn("report", LocalDate.of(2026, 3, 15));
+
+        mvc.perform(get("/employees/stranger/reporting-history").with(manager())).andExpect(status().isForbidden());
+        mvc.perform(get("/employees/stranger/reporting-history").with(jwt().authorities(role("HR"))))
+                .andExpect(status().isOk());
+        mvc.perform(get("/employees/report/reports-on").param("date", "not-a-date").with(manager()))
+                .andExpect(status().isBadRequest());
     }
 }

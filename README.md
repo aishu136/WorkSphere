@@ -46,6 +46,15 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
   example "Who in Engineering knows Kafka?" or "Who does Priya's manager report to?". The assistant
   looks the answer up in the org chart before replying, and never changes data. See
   [AI assistant](#ai-assistant).
+- **Org analytics.** For HR: headcount, span of control (managers with too many or too few reports),
+  org depth, skills on a project that only one person has (the "bus factor"), and skill gaps per
+  department. See [Org analytics](#org-analytics).
+- **Org chart history.** Who someone reported to, and which department they were in, over time.
+  Also who reported to a manager on a past date. It is rebuilt from the audit trail. See
+  [Org chart history](#org-chart-history).
+- **Web app.** A browser front end served by the application at **http://localhost:8081/**. It has
+  the org chart, your leave, approval inboxes, a team calendar, analytics and the assistant. See
+  [Web app](#web-app).
 - **Versioned database migrations.** Constraints, indexes and data conversions run automatically at
   startup.
 
@@ -162,6 +171,58 @@ employee: POST /leave-requests  ->  PENDING
 
 These emails go through the same outbox as the others.
 
+### Org analytics
+
+HR and ADMIN only. Everything counts current employees; terminated people have no links left, so
+they drop out.
+
+- `GET /analytics/overview`: headcount, how many are on leave, how many managers there are, the
+  average and widest span of control (direct reports), the number of levels in the longest reporting
+  line, and how many people have no manager or no department.
+- `GET /analytics/managers`: managers with the most direct reports first. For each, their total
+  reports and how many levels sit below them. Managers above `app.analytics.max-span` (10 by
+  default) are flagged `WIDE`, and those with a single report `NARROW`.
+- `GET /analytics/project-skill-risks`: for each open project's required skills, the current
+  members who have the skill at the required level. A skill is **at risk** when one person or nobody
+  covers it. By default only projects with a risk are listed, most risks first; `?atRiskOnly=false`
+  lists all of them. Members whose assignment has ended don't count.
+- `GET /analytics/skill-gaps?departmentId=`: for each department that owns open projects, the
+  skills those projects need. The level is the highest any of them needs. Each skill shows how many
+  active people in the department or its sub-departments have it at that level. A skill is
+  **short** when fewer people qualify than projects need it.
+
+### Org chart history
+
+The history is rebuilt from the audit trail, which records every change of manager or department
+with its before and after value. Termination records the links it removed.
+
+- `GET /employees/{id}/reporting-history`: who the person reported to, and which department they
+  were in, oldest first. Each period has a `from` and `to`; `to` is null while it still applies.
+- `GET /employees/{id}/reports-on?date=2026-03-15`: who reported directly to this person at the end
+  of that day.
+- Who can see it: the employee, a manager above them now, or HR.
+- Links from before the audit trail existed show as starting at an unknown time (`from` is null).
+  Changes made directly in the database, bypassing the API, aren't seen. Names are today's names.
+
+### Web app
+
+The application serves a small browser front end at its root URL, e.g. **http://localhost:8081/**.
+It needs no build step: plain HTML, CSS and JavaScript in `src/main/resources/static`. It runs on
+the same address as the API, so no CORS setup is needed.
+
+- **Login:** use the same username and password as the API. The token is kept in the browser tab's
+  session storage and is gone when the tab is closed.
+- **Pages:**
+  - Org chart: a person, their reporting line, direct reports, projects and reporting history.
+  - My leave: balance, request, cancel.
+  - Approvals: your team's pending leave, plus staffing requests for HR.
+  - Team calendar: who is away in a month.
+  - Analytics: HR only.
+  - Assistant.
+- The pages only call the API, so every permission rule still applies. Pages you can't use are
+  hidden, and anything else you can't see shows "You don't have access to this".
+- Everything shown is rendered as text, never as HTML, so names and notes can't inject markup.
+
 ### Staffing approvals
 
 Project leads don't change their project's members directly. They raise a request, and HR decides it:
@@ -246,9 +307,12 @@ logged-in user can already read through the API:
 - finding offices
 - finding projects, project members and an employee's projects
 - skills with levels, and suggesting candidates for a project
+- leave: who is away and when, and leave balances. Callers see their own leave and their team's;
+  HR sees everyone's, the same as the API. The model is told today's date, so it can work out
+  "next week".
 
 The assistant can't change data or read audit history, so it can't be used to get around
-permissions. If a tool fails, for example with an unknown id, the error goes back to the model as a
+permissions. Staffing requests and leave are checked against who is asking. If a tool fails, for example with an unknown id, the error goes back to the model as a
 message, so it can correct itself instead of failing the request. The system prompt tells the model
 to treat tool results as data and to ignore any instructions inside them.
 
@@ -276,6 +340,7 @@ All secrets come from environment variables. None are stored in the repository.
 | `NOTIFY_HR_EMAIL` | for email | Shared HR mailbox. It receives new and withdrawn staffing requests, leave requests from people without a manager, and leave and reporting-line changes made by managers. |
 | `NOTIFY_FROM` | no | Sender address. Defaults to `no-reply@worksphere.local`. |
 | `APP_BASE_URL` | no | Frontend address used for links in emails, e.g. `https://worksphere.example.com`. |
+| `app.analytics.max-span` (property) | no | Managers with more direct reports than this are flagged `WIDE`. Defaults to 10. |
 | `app.leave.annual-allowance-days` (property) | no | Working days of annual leave per person per calendar year. Defaults to 20. |
 | `app.outbox.*` (properties) | no | `poll-interval` (PT30S), `batch-size` (50), `max-attempts` (8), `retention` (P30D). |
 | AWS credentials | for `/ai` | Picked up in the standard AWS way, e.g. `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or `~/.aws/credentials`. The region is `us-east-1`. |
@@ -304,8 +369,8 @@ $env:ADMIN_PASSWORD="<strong password>"
 On startup the app applies any pending database migrations, then creates the admin account if the
 database has no users yet.
 
-The interactive API docs are at **http://localhost:8081/swagger-ui.html**. Log in, then paste the
-token into the **Authorize** button.
+The web app is at **http://localhost:8081/**. The interactive API docs are at
+**http://localhost:8081/swagger-ui.html**: log in, then paste the token into the **Authorize** button.
 
 ### First steps
 
@@ -321,8 +386,8 @@ token into the **Authorize** button.
 | Who | Can do |
 |---|---|
 | **ADMIN** | Everything, including managing logins, reading the full audit log and handling failed emails. |
-| **HR** | Hire, update, terminate and move employees. Manage departments, offices and projects, including who works on them. Read the change history of any employee, department, office or project. |
-| **Manager** (any login linked to an employee who has reports) | For people below them in the org chart: approve or reject leave, see their leave and balance, change leave status, edit skills, and move a report to another manager inside their own team. |
+| **HR** | Hire, update, terminate and move employees. Manage departments, offices and projects, including who works on them. Read the change history of any employee, department, office or project. See org analytics and anyone's reporting history. |
+| **Manager** (any login linked to an employee who has reports) | For people below them in the org chart: approve or reject leave, see their leave, balance and reporting history, change leave status, edit skills, and move a report to another manager inside their own team. |
 | **Project lead** (a login linked to a project's lead) | Request staffing changes on their own open projects, and view or cancel those requests. HR must approve. Set which skills their project needs. |
 | **Everyone logged in** | Read the directory, org chart, departments, offices and projects. Request and cancel their own leave. Use the AI assistant. |
 
@@ -379,6 +444,8 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | POST / PUT | `/employees/{id}/skills` | Add one skill or change its level (`{"name":"Java","level":4}`), or replace all skills (a list). |
 | DELETE | `/employees/{id}/skills/{skillId}` | Remove a skill. |
 | GET | `/employees/{id}/history` | Change history for this employee. HR or ADMIN. |
+| GET | `/employees/{id}/reporting-history` | Their managers and departments over time. The employee, a manager above them, or HR. |
+| GET | `/employees/{id}/reports-on?date=` | Who reported directly to them at the end of that day. The employee, a manager above them, or HR. |
 
 ### Departments
 
@@ -445,6 +512,17 @@ All lists accept `?status=&from=&to=`. `from` and `to` (ISO dates) find leave th
 | POST | `/leave-requests/{id}/reject` | `{"reason":"..."}`. A manager above the employee, or HR. Not your own. |
 | POST | `/leave-requests/{id}/cancel` | Withdraw pending leave, or approved leave that hasn't started. The requester only. |
 | GET | `/employees/{id}/leave-balance?year=` | Annual leave allowance and days used. The employee, a manager above them, or HR. |
+
+### Analytics
+
+All HR or ADMIN. See [Org analytics](#org-analytics).
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/analytics/overview` | Headcount, managers, span of control, org depth, people without a manager or department. |
+| GET | `/analytics/managers` | Managers by number of direct reports, flagged `WIDE` or `NARROW`. |
+| GET | `/analytics/project-skill-risks?atRiskOnly=` | Required skills on open projects covered by one person or nobody. |
+| GET | `/analytics/skill-gaps?departmentId=` | Skills departments' open projects need against qualified people. |
 
 ### Audit and AI
 
@@ -521,24 +599,32 @@ access to Aura to run them. They cover:
 - **Audit trail:** only changed fields are recorded, and a failed change leaves no audit event.
 - **Migrations:** run against data in the old `Person` format.
 - **AI assistant:** the LangGraph4j loop driven by a scripted model. Covers tool results reaching
-  the model, errors handed back as messages, and the step limit.
+  the model, errors handed back as messages, and the step limit. The leave tools show only your own
+  and your team's leave, HR sees everyone's, and the model is told today's date.
+- **Org analytics:** overview figures, managers and their flags, skills at risk (including ended
+  assignments not counting), and department skill gaps across sub-departments.
+- **Org chart history:** periods built from real changes, termination ending them, who reported to
+  whom on past dates, and links from before the audit trail.
 - **End to end:** the whole application started and driven over HTTP, including an `/ai` question
   answered from real Neo4j data. The model is replaced with a stand-in, so Bedrock isn't needed.
+  The web app's files load without logging in, while the API still needs a token.
 
 ## Project structure
 
 ```
 src/main/java/com/example/neo4j/
-├── controller/     REST endpoints for employees, departments, auth and users
+├── controller/     REST endpoints
 ├── service/        Business rules. Every write is transactional and audited.
-├── repository/     Spring Data repositories, plus hand-written Cypher (EmployeeQueries, DepartmentQueries)
-├── entity/         Graph entities: Employee, Department, Skill, Company, AppUser
+├── repository/     Spring Data repositories, plus hand-written Cypher (the *Queries classes)
+├── entity/         Graph entities, e.g. Employee, Department, Project, LeaveRequest
 ├── dto/            Request and response types
 ├── security/       JWT, role rules and the manager team check (SecurityConfig, TeamAuthorization)
 ├── audit/          Audit trail: AuditLog and the /audit endpoints
 ├── aiservice/      AI assistant: agent/ holds the LangGraph4j graph and its read-only tools
 ├── route/          Camel route for the AI request
 └── exception/      Maps errors to HTTP status codes
+
+src/main/resources/static/   The web app (index.html, app.js, app.css)
 ```
 
 ## Known limitations

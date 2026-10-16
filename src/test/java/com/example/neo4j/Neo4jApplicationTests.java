@@ -88,6 +88,37 @@ class Neo4jApplicationTests {
 	}
 
 	@Test
+	void theWebAppLoadsWithoutLoggingInButTheApiDoesNot() throws Exception {
+
+		mvc.perform(get("/")).andExpect(status().isOk())
+				.andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl("index.html"));
+		mvc.perform(get("/index.html")).andExpect(status().isOk())
+				.andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+						.string(org.hamcrest.Matchers.containsString("app.js")));
+		mvc.perform(get("/app.js")).andExpect(status().isOk());
+		mvc.perform(get("/app.css")).andExpect(status().isOk());
+		mvc.perform(get("/employees")).andExpect(status().isUnauthorized());
+
+		// The pages behind it answer for a logged-in admin.
+		String auth = "Bearer " + call(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+				.content("{\"username\":\"admin\",\"password\":\"bootstrap-password\"}"), 200)
+				.get("accessToken").asText();
+		String id = call(post("/employees").header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+				.content("{\"employeeCode\":\"WEB1\",\"name\":\"Wendy Web\",\"email\":\"wendy@example.com\","
+						+ "\"hireDate\":\"2024-01-15\"}"), 201).get("id").asText();
+
+		mvc.perform(get("/analytics/overview").header("Authorization", auth))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.headcount").isNumber());
+		mvc.perform(get("/analytics/managers").header("Authorization", auth)).andExpect(status().isOk());
+		mvc.perform(get("/analytics/project-skill-risks").header("Authorization", auth)).andExpect(status().isOk());
+		mvc.perform(get("/analytics/skill-gaps").header("Authorization", auth)).andExpect(status().isOk());
+		mvc.perform(get("/employees/" + id + "/reporting-history").header("Authorization", auth))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.employeeId").value(id));
+		mvc.perform(get("/employees/" + id + "/reports-on").param("date", "2026-01-01").header("Authorization", auth))
+				.andExpect(status().isOk());
+	}
+
+	@Test
 	void adminCanBuildAndReadAnOrgChart() throws Exception {
 
 		String token = call(post("/auth/login").contentType(MediaType.APPLICATION_JSON)

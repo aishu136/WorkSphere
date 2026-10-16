@@ -118,6 +118,18 @@ public class LeaveService {
 		return leaveQueries.search(filter, null, pageable);
 	}
 
+	/** The employee linked to this login, if any. */
+	@Transactional(readOnly = true)
+	public Optional<String> employeeIdOf(String username) {
+		return linkedEmployee(username);
+	}
+
+	/** True if the login may see this employee's leave: they are the employee or a manager above them. HR always may. */
+	@Transactional(readOnly = true)
+	public boolean canSeeLeaveOf(String username, String employeeId) {
+		return employeeQueries.isInTeamOf(username, employeeId, true);
+	}
+
 	@Transactional(readOnly = true)
 	public LeaveBalanceResponse balance(String employeeId, int year) {
 

@@ -147,6 +147,21 @@ public class AuditLog {
         return new PageImpl<>(content, pageable, total);
     }
 
+    /**
+     * Employees with an audit event of one of these actions whose details mention the text, e.g. a
+     * manager's id. Used to find everyone who ever reported to someone.
+     */
+    @Transactional(readOnly = true)
+    public List<String> employeesMentioning(List<AuditAction> actions, String text) {
+        return List.copyOf(client.query("""
+                        MATCH (a:AuditEvent {targetType: 'EMPLOYEE'})
+                        WHERE a.action IN $actions AND a.details CONTAINS $text
+                        RETURN DISTINCT a.targetId AS id ORDER BY id
+                        """)
+                .bindAll(Map.of("actions", actions.stream().map(AuditAction::name).toList(), "text", text))
+                .fetchAs(String.class).all());
+    }
+
     private static AuditEventResponse toResponse(Record record) {
         Value event = record.get("event");
         return new AuditEventResponse(

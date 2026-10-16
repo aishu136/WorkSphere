@@ -50,10 +50,13 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error").permitAll()
+                // The web app's static files. They hold no data; everything they show comes from the API.
+                .requestMatchers(HttpMethod.GET, "/", "/index.html", "/app.js", "/app.css", "/favicon.ico").permitAll()
                 .requestMatchers("/users/**").hasRole(Role.ADMIN.name())
 
                 // Audit trail: the full log (including logins) is ADMIN only; a record's history is HR/ADMIN.
                 .requestMatchers("/audit/**", "/outbox/**").hasRole(Role.ADMIN.name())
+                .requestMatchers("/analytics/**").hasAnyRole(Role.HR.name(), Role.ADMIN.name())
                 .requestMatchers(HttpMethod.GET, "/employees/{id}/history", "/departments/{id}/history",
                         "/offices/{id}/history", "/projects/{id}/history")
                     .hasAnyRole(Role.HR.name(), Role.ADMIN.name())
@@ -72,6 +75,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/leave-requests").hasAnyRole(Role.HR.name(), Role.ADMIN.name())
                 .requestMatchers("/leave-requests/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/employees/{id}/leave-balance").access(team.hrOrSelfOrManagerOf("id"))
+                // Org chart history: the employee, a manager above them, or HR.
+                .requestMatchers(HttpMethod.GET, "/employees/{id}/reporting-history", "/employees/{id}/reports-on")
+                    .access(team.hrOrSelfOrManagerOf("id"))
 
                 .requestMatchers(HttpMethod.GET, "/employees/**", "/departments/**", "/offices/**", "/projects/**")
                     .authenticated()
