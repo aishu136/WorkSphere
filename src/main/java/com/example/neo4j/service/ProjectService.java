@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -364,16 +365,17 @@ public class ProjectService {
 		if (end.isBefore(start)) {
 			throw new IllegalArgumentException("to cannot be before from");
 		}
-		int windowDays = WorkingDays.between(start, end);
 
 		record Ranked(CandidateResponse candidate, double score) {
 		}
 
 		List<Ranked> ranked = projectQueries.candidates(id, start, end).stream()
 				.map(row -> {
+					// Working days skip each person's own office holidays.
+					int windowDays = WorkingDays.between(start, end, row.holidays());
 					int free = MAX_ALLOCATION - Allocations.peak(row.bookings(), start, end).percent();
-					int leave = leaveDays(row.leave(), LeaveStatus.APPROVED, start, end);
-					int pending = leaveDays(row.leave(), LeaveStatus.PENDING, start, end);
+					int leave = leaveDays(row.leave(), LeaveStatus.APPROVED, start, end, row.holidays());
+					int pending = leaveDays(row.leave(), LeaveStatus.PENDING, start, end, row.holidays());
 					int availability = windowDays == 0 ? 100
 							: (int) Math.round(100.0 * (windowDays - leave) / windowDays);
 					return new Ranked(new CandidateResponse(row.employee(), (int) Math.round(row.score() * 100),
@@ -397,10 +399,11 @@ public class ProjectService {
 		return new PageImpl<>(page, pageable, ranked.size());
 	}
 
-	private static int leaveDays(List<Period> leave, LeaveStatus status, LocalDate from, LocalDate to) {
+	private static int leaveDays(List<Period> leave, LeaveStatus status, LocalDate from, LocalDate to,
+			Set<LocalDate> holidays) {
 		return leave.stream()
 				.filter(period -> period.status() == status)
-				.mapToInt(period -> WorkingDays.overlap(period.startDate(), period.endDate(), from, to))
+				.mapToInt(period -> WorkingDays.overlap(period.startDate(), period.endDate(), from, to, holidays))
 				.sum();
 	}
 

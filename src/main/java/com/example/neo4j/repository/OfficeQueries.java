@@ -2,6 +2,7 @@ package com.example.neo4j.repository;
 
 import static com.example.neo4j.repository.EmployeeQueries.text;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,9 +16,13 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Repository;
 
+import com.example.neo4j.dto.HolidayResponse;
 import com.example.neo4j.dto.OfficeResponse;
 
-/** Hand-written Cypher for office reads. Employees link to offices with LOCATED_AT. */
+/**
+ * Hand-written Cypher for offices. Employees link to offices with LOCATED_AT; an office's public
+ * holidays are (:Office)-[:OBSERVES]->(:Holiday).
+ */
 @Repository
 public class OfficeQueries {
 
@@ -67,6 +72,61 @@ public class OfficeQueries {
                 .all());
 
         return new PageImpl<>(content, pageable, total);
+    }
+
+    /** The office's holidays between from and to (inclusive), by date. */
+    public List<HolidayResponse> holidays(String officeId, LocalDate from, LocalDate to) {
+        return List.copyOf(client.query("""
+                        MATCH (:Office {id: $id})-[:OBSERVES]->(h:Holiday)
+                        WHERE h.date >= $from AND h.date <= $to
+                        RETURN h.id AS id, h.date AS date, h.name AS name
+                        ORDER BY date, id
+                        """)
+                .bindAll(Map.of("id", officeId, "from", from, "to", to))
+                .fetchAs(HolidayResponse.class)
+                .mappedBy((types, record) -> new HolidayResponse(text(record.get("id")),
+                        EmployeeQueries.date(record.get("date")), text(record.get("name"))))
+                .all());
+    }
+
+    public boolean hasHolidayOn(String officeId, LocalDate date) {
+        return client.query("RETURN EXISTS { (:Office {id: $id})-[:OBSERVES]->(:Holiday {date: $date}) } AS taken")
+                .bindAll(Map.of("id", officeId, "date", date))
+                .fetchAs(Boolean.class).one().orElse(false);
+    }
+
+    public HolidayResponse addHoliday(String officeId, LocalDate date, String name) {
+        return client.query("""
+                        MATCH (o:Office {id: $id})
+                        CREATE (o)-[:OBSERVES]->(h:Holiday {id: randomUUID(), date: $date, name: $name})
+                        RETURN h.id AS id, h.date AS date, h.name AS name
+                        """)
+                .bindAll(Map.of("id", officeId, "date", date, "name", name))
+                .fetchAs(HolidayResponse.class)
+                .mappedBy((types, record) -> new HolidayResponse(text(record.get("id")),
+                        EmployeeQueries.date(record.get("date")), text(record.get("name"))))
+                .one().orElseThrow();
+    }
+
+    /** Removes one of the office's holidays and returns it, if it was there. */
+    public Optional<HolidayResponse> removeHoliday(String officeId, String holidayId) {
+        return client.query("""
+                        MATCH (:Office {id: $id})-[:OBSERVES]->(h:Holiday {id: $holidayId})
+                        WITH h, h.id AS id, h.date AS date, h.name AS name
+                        DETACH DELETE h
+                        RETURN id, date, name
+                        """)
+                .bindAll(Map.of("id", officeId, "holidayId", holidayId))
+                .fetchAs(HolidayResponse.class)
+                .mappedBy((types, record) -> new HolidayResponse(text(record.get("id")),
+                        EmployeeQueries.date(record.get("date")), text(record.get("name"))))
+                .one();
+    }
+
+    public void removeAllHolidays(String officeId) {
+        client.query("MATCH (:Office {id: $id})-[:OBSERVES]->(h:Holiday) DETACH DELETE h")
+                .bind(officeId).to("id")
+                .run();
     }
 
     public boolean hasEmployees(String officeId) {

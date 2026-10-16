@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.neo4j.driver.Record;
 import org.neo4j.driver.Value;
@@ -142,6 +143,19 @@ public class LeaveQueries {
                 .fetchAs(Period.class)
                 .mappedBy((types, record) -> new Period(date(record.get("startDate")), date(record.get("endDate")),
                         LeaveStatus.valueOf(text(record.get("status")))))
+                .all());
+    }
+
+    /** Public holidays of the employee's office between from and to (inclusive). */
+    public Set<LocalDate> holidayDates(String employeeId, LocalDate from, LocalDate to) {
+        return Set.copyOf(client.query("""
+                        MATCH (:Employee {id: $id})-[:LOCATED_AT]->(:Office)-[:OBSERVES]->(h:Holiday)
+                        WHERE h.date >= $from AND h.date <= $to
+                        RETURN h.date AS date
+                        """)
+                .bindAll(Map.of("id", employeeId, "from", from, "to", to))
+                .fetchAs(LocalDate.class)
+                .mappedBy((types, record) -> date(record.get("date")))
                 .all());
     }
 

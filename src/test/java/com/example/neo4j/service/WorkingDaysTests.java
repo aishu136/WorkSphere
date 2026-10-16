@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDate;
 
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class WorkingDaysTests {
@@ -19,6 +20,16 @@ class WorkingDaysTests {
         assertThat(WorkingDays.between(MON.plusDays(5), MON.plusDays(6))).isZero();
         assertThat(WorkingDays.between(MON, MON.plusDays(13))).isEqualTo(10);
         assertThat(WorkingDays.between(MON.plusDays(1), MON)).isZero();
+    }
+
+    @Test
+    void officeHolidaysAreNotWorkingDays() {
+        // Wednesday is a holiday; a holiday on a Saturday changes nothing.
+        Set<LocalDate> holidays = Set.of(MON.plusDays(2), MON.plusDays(5));
+
+        assertThat(WorkingDays.between(MON, MON.plusDays(6), holidays)).isEqualTo(4);
+        assertThat(WorkingDays.between(MON.plusDays(2), MON.plusDays(2), holidays)).isZero();
+        assertThat(WorkingDays.overlap(MON, MON.plusDays(13), MON.plusDays(1), MON.plusDays(3), holidays)).isEqualTo(2);
     }
 
     @Test

@@ -954,4 +954,24 @@ class SecurityAndDtoTests {
                 .andExpect(status().isNoContent());
         verify(sessionService).revokeSessions("u1");
     }
+
+    @Test
+    void anyoneReadsOfficeHolidaysButOnlyHrChangesThem() throws Exception {
+        String holiday = "{\"date\":\"2030-12-25\",\"name\":\"Christmas Day\"}";
+
+        mvc.perform(get("/offices/o1/holidays").param("year", "2030").with(manager())).andExpect(status().isOk());
+        verify(officeService).holidays("o1", 2030);
+
+        mvc.perform(post("/offices/o1/holidays").with(manager()).contentType(MediaType.APPLICATION_JSON).content(holiday))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/offices/o1/holidays").with(jwt().authorities(role("HR")))
+                        .contentType(MediaType.APPLICATION_JSON).content(holiday))
+                .andExpect(status().isCreated());
+        mvc.perform(post("/offices/o1/holidays").with(jwt().authorities(role("HR")))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"No date\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(delete("/offices/o1/holidays/h1").with(jwt().authorities(role("HR"))))
+                .andExpect(status().isNoContent());
+        verify(officeService).removeHoliday("o1", "h1");
+    }
 }

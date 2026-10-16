@@ -1,12 +1,17 @@
 package com.example.neo4j.controller;
 
+import java.time.LocalDate;
+import java.util.List;
+
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import com.example.neo4j.dto.CreateHolidayRequest;
 import com.example.neo4j.dto.CreateOfficeRequest;
 import com.example.neo4j.dto.EmployeeResponse;
+import com.example.neo4j.dto.HolidayResponse;
 import com.example.neo4j.dto.OfficeResponse;
 import com.example.neo4j.dto.PageParams;
 import com.example.neo4j.dto.PageResponse;
@@ -14,6 +19,8 @@ import com.example.neo4j.dto.UpdateOfficeRequest;
 import com.example.neo4j.service.OfficeService;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 
 // Reads: any logged-in user. Changes: HR or ADMIN (enforced in SecurityConfig).
 @RestController
@@ -64,6 +71,34 @@ public class OfficeController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable("id") String id) {
         service.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ---- Public holidays ------------------------------------------------------
+
+    // ?year=, this year by default.
+    @GetMapping("/{id}/holidays")
+    public ResponseEntity<List<HolidayResponse>> holidays(
+            @PathVariable("id") String id,
+            @RequestParam(name = "year", required = false) @Min(2000) @Max(2100) Integer year) {
+
+        return ResponseEntity.ok(service.holidays(id, year == null ? LocalDate.now().getYear() : year));
+    }
+
+    @PostMapping("/{id}/holidays")
+    public ResponseEntity<HolidayResponse> addHoliday(
+            @PathVariable("id") String id,
+            @RequestBody @Valid CreateHolidayRequest request) {
+
+        return new ResponseEntity<>(service.addHoliday(id, request), HttpStatus.CREATED);
+    }
+
+    @DeleteMapping("/{id}/holidays/{holidayId}")
+    public ResponseEntity<Void> removeHoliday(
+            @PathVariable("id") String id,
+            @PathVariable("holidayId") String holidayId) {
+
+        service.removeHoliday(id, holidayId);
         return ResponseEntity.noContent().build();
     }
 }

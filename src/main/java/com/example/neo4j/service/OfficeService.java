@@ -1,6 +1,8 @@
 package com.example.neo4j.service;
 
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -13,9 +15,11 @@ import com.example.neo4j.audit.AuditAction;
 import com.example.neo4j.audit.AuditLog;
 import com.example.neo4j.audit.AuditTargetType;
 import com.example.neo4j.audit.Changes;
+import com.example.neo4j.dto.CreateHolidayRequest;
 import com.example.neo4j.dto.CreateOfficeRequest;
 import com.example.neo4j.dto.EmployeeFilter;
 import com.example.neo4j.dto.EmployeeResponse;
+import com.example.neo4j.dto.HolidayResponse;
 import com.example.neo4j.dto.OfficeResponse;
 import com.example.neo4j.dto.UpdateOfficeRequest;
 import com.example.neo4j.entity.Office;
@@ -130,6 +134,7 @@ public class OfficeService {
 					+ " employee(s) to another office before deleting it");
 		}
 
+		officeQueries.removeAllHolidays(id);
 		officeRepository.deleteById(id);
 
 		Map<String, Object> details = new LinkedHashMap<>();
@@ -137,6 +142,44 @@ public class OfficeService {
 		details.put("name", office.name());
 		details.put("city", office.city());
 		audit(AuditAction.OFFICE_DELETED, id, details);
+	}
+
+	// ---- Holidays ---------------------------------------------------------------
+
+	/** The office's public holidays in a calendar year, by date. */
+	@Transactional(readOnly = true)
+	public List<HolidayResponse> holidays(String id, int year) {
+		requireExists(id);
+		return officeQueries.holidays(id, LocalDate.of(year, 1, 1), LocalDate.of(year, 12, 31));
+	}
+
+	/** Adds a public holiday. Leave and availability for people in this office skip it. One per day. */
+	@Transactional
+	public HolidayResponse addHoliday(String id, CreateHolidayRequest request) {
+		requireExists(id);
+		if (officeQueries.hasHolidayOn(id, request.date())) {
+			throw new ConflictException("This office already has a holiday on " + request.date());
+		}
+
+		HolidayResponse holiday = officeQueries.addHoliday(id, request.date(), request.name().trim());
+		audit(AuditAction.OFFICE_HOLIDAY_ADDED, id, holidayDetails(holiday));
+		return holiday;
+	}
+
+	@Transactional
+	public void removeHoliday(String id, String holidayId) {
+		requireExists(id);
+		HolidayResponse removed = officeQueries.removeHoliday(id, holidayId)
+				.orElseThrow(() -> new ResourceNotFoundException("Holiday not found with id: " + holidayId));
+		audit(AuditAction.OFFICE_HOLIDAY_REMOVED, id, holidayDetails(removed));
+	}
+
+	private static Map<String, Object> holidayDetails(HolidayResponse holiday) {
+		Map<String, Object> details = new LinkedHashMap<>();
+		details.put("holidayId", holiday.id());
+		details.put("date", holiday.date());
+		details.put("name", holiday.name());
+		return details;
 	}
 
 	private void audit(AuditAction action, String officeId, Map<String, Object> details) {

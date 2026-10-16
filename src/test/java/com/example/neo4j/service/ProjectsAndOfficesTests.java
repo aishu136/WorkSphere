@@ -3,6 +3,8 @@ package com.example.neo4j.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.neo4j.dto.CreateHolidayRequest;
+import com.example.neo4j.dto.HolidayResponse;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -106,6 +108,34 @@ class ProjectsAndOfficesTests extends SharedNeo4jTest {
         // Moving offices replaces the link.
         assertThat(employees.assignOffice(a, chn).office().code()).isEqualTo("CHN-01");
         assertThat(offices.findById(blr).employeeCount()).isZero();
+    }
+
+    @Test
+    void officesKeepTheirPublicHolidays() {
+        String blr = office("BLR-01", "Bengaluru");
+
+        HolidayResponse christmas = offices.addHoliday(blr, new CreateHolidayRequest(LocalDate.of(2030, 12, 25),
+                " Christmas Day "));
+        offices.addHoliday(blr, new CreateHolidayRequest(LocalDate.of(2030, 1, 26), "Republic Day"));
+        offices.addHoliday(blr, new CreateHolidayRequest(LocalDate.of(2031, 1, 1), "New Year's Day"));
+        assertThat(christmas.name()).isEqualTo("Christmas Day");
+
+        // One holiday per day.
+        assertThatThrownBy(() -> offices.addHoliday(blr, new CreateHolidayRequest(LocalDate.of(2030, 12, 25), "Again")))
+                .isInstanceOf(ConflictException.class);
+
+        assertThat(offices.holidays(blr, 2030)).extracting(HolidayResponse::name)
+                .containsExactly("Republic Day", "Christmas Day");
+
+        offices.removeHoliday(blr, christmas.id());
+        assertThat(offices.holidays(blr, 2030)).extracting(HolidayResponse::name).containsExactly("Republic Day");
+        assertThatThrownBy(() -> offices.removeHoliday(blr, christmas.id()))
+                .isInstanceOf(com.example.neo4j.exception.ResourceNotFoundException.class);
+
+        // Deleting the office takes its holidays with it.
+        offices.delete(blr);
+        assertThat(auditLog.search(new AuditFilter(null, AuditAction.OFFICE_HOLIDAY_ADDED, AuditTargetType.OFFICE,
+                blr, null, null), FIRST_PAGE).getTotalElements()).isEqualTo(3);
     }
 
     @Test

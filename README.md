@@ -23,6 +23,7 @@ neo4j-migrations · Apache Camel · LangGraph4j + LangChain4j + Amazon Bedrock
 - **Directory search.** Filter by name prefix, status, department, skill, company, office and free
   capacity. All list endpoints are paginated.
 - **Offices.** Each employee can be placed in one office. Offices can be searched by name or city.
+  Each office keeps its own public holidays, which leave and availability skip.
 - **Projects and staffing.** Projects have a status, dates, an owning department and a lead. People
   join with a role, an allocation percentage and dates. **Nobody can be allocated more than 100% on
   any day**, so someone fully booked until March can be booked from April. Search can find people
@@ -123,7 +124,8 @@ Levels are 1 beginner, 2 basic, 3 intermediate, 4 advanced, 5 expert.
   - **Match %:** the average over the required skills. Meeting the level counts fully, being below
     it counts as your level divided by the required level, and not having the skill counts as 0.
     For example, Java 2 of a required 4, and no Kafka, gives (0.5 + 0) / 2 = 25%.
-  - **Leave:** each candidate shows their working days of approved and pending leave in the period.
+  - **Leave:** each candidate shows their working days of approved and pending leave in the period,
+    skipping their own office's holidays.
     They also get an availability percentage: the share of the period's working days they are not on
     approved leave.
   - **Order:** highest match first, then people in the owning department or one of its
@@ -144,8 +146,10 @@ employee: POST /leave-requests  ->  PENDING
                                      |-- employee cancels       -> CANCELLED
 ```
 
-- **Types:** `ANNUAL`, `SICK`, `UNPAID` and `OTHER`. Leave is counted in **working days**, Monday to
-  Friday. Public holidays aren't known, so they count as working days.
+- **Types:** `ANNUAL`, `SICK`, `UNPAID` and `OTHER`. Leave is counted in **working days**: Monday to
+  Friday, minus the public holidays of the employee's office. A request's `workingDays` is counted
+  when it is made. Balances are always counted against today's holidays, so a holiday added later
+  frees up the day.
 - **Who requests:** an employee for themselves. Their login must be linked to their employee record.
   Past dates are allowed, so sick leave can be recorded afterwards. One request can't span more than
   a year.
@@ -503,6 +507,9 @@ All list endpoints accept `?page=0&size=20` (the maximum size is 100) and return
 | GET / PUT / DELETE | `/offices/{id}` | Read, update or delete. Only empty offices can be deleted. |
 | GET | `/offices/{id}/employees` | People in this office. |
 | GET | `/offices/{id}/history` | Change history. HR or ADMIN. |
+| GET | `/offices/{id}/holidays?year=` | The office's public holidays in a year (this year by default). |
+| POST | `/offices/{id}/holidays` | Add a holiday: `{"date":"2026-12-25","name":"Christmas Day"}`. One per day. HR or ADMIN. |
+| DELETE | `/offices/{id}/holidays/{holidayId}` | Remove a holiday. HR or ADMIN. |
 
 ### Projects
 
@@ -595,6 +602,8 @@ Scripts in `src/main/resources/neo4j/migrations` run in order at startup. Each o
 | V0008 | Gives existing skills a level of 3 (intermediate). |
 | V0009 | Constraint and indexes for leave requests. |
 | V0010 | Gives existing project assignments a start date: the day the person joined. |
+| V0011 | Constraints and index for refresh tokens. |
+| V0012 | Constraint and index for office holidays. |
 
 To change the schema, add a new `V0005__description.cypher` file. Never edit a migration that has
 already been applied.
@@ -680,8 +689,8 @@ src/main/resources/static/   The web app (index.html, app.js, app.css)
   [Email outbox and retries](#email-outbox-and-retries)).
 - **Audit tamper protection.** The application can't change audit events, but anyone with direct
   database access could. For strict compliance, also stream audit events to a write-once store.
-- **Public holidays.** Leave counts Monday to Friday as working days. There's no holiday calendar,
-  and the allowance is the same for everyone.
+- **Allowances.** The annual allowance is the same for everyone. Someone without an office has no
+  public holidays.
 - **Checks under concurrency.** Leave requests lock the employee while they are checked, so overlaps
   and the allowance hold. The reporting-loop check and the 100% allocation check aren't
   protected by a database lock. Two changes made at exactly the same moment could, rarely, get past

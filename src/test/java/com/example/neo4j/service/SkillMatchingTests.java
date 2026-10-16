@@ -22,6 +22,8 @@ import com.example.neo4j.dto.CandidateResponse;
 import com.example.neo4j.dto.CandidateResponse.SkillMatch;
 import com.example.neo4j.dto.CreateDepartmentRequest;
 import com.example.neo4j.dto.CreateEmployeeRequest;
+import com.example.neo4j.dto.CreateHolidayRequest;
+import com.example.neo4j.dto.CreateOfficeRequest;
 import com.example.neo4j.dto.CreateProjectRequest;
 import com.example.neo4j.dto.EmployeeFilter;
 import com.example.neo4j.dto.EmployeeResponse;
@@ -58,6 +60,9 @@ class SkillMatchingTests extends SharedNeo4jTest {
 
     @Autowired
     LeaveRequestRepository leaveRequests;
+
+    @Autowired
+    OfficeService offices;
 
     private static final PageRequest FIRST_PAGE = PageRequest.of(0, 20);
 
@@ -293,6 +298,33 @@ class SkillMatchingTests extends SharedNeo4jTest {
 
         assertThatThrownBy(() -> projects.candidates(payroll, 1, end, start, FIRST_PAGE))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void eachCandidatesOwnOfficeHolidaysCount() {
+        // A one-week project: Monday 4 to Friday 8 March 2030.
+        LocalDate start = LocalDate.of(2030, 3, 4);
+        LocalDate end = LocalDate.of(2030, 3, 8);
+        String payroll = projects.create(new CreateProjectRequest("PAYROLL", "Payroll", null, ProjectStatus.ACTIVE,
+                start, end, null, null)).id();
+        projects.replaceRequiredSkills(payroll, List.of(skill("Java", 3)));
+        String office = offices.create(new CreateOfficeRequest("BLR-01", "Bengaluru office", "Bengaluru", "India",
+                null, 100)).id();
+        offices.addHoliday(office, new CreateHolidayRequest(end, "Office closed"));
+
+        // Both are away Monday to Thursday. For Local, Friday is a holiday: no working day is left.
+        String local = hire("LO", "Local");
+        skills(local, skill("Java", 4));
+        employees.assignOffice(local, office);
+        leave(local, LeaveStatus.APPROVED, start, end.minusDays(1));
+        String remote = hire("RE", "Remote");
+        skills(remote, skill("Java", 4));
+        leave(remote, LeaveStatus.APPROVED, start, end.minusDays(1));
+
+        List<CandidateResponse> candidates = projects.candidates(payroll, 1, null, null, FIRST_PAGE).getContent();
+        assertThat(candidates).extracting(c -> c.employee().name()).containsExactly("Remote");
+        assertThat(candidates.get(0).leaveDays()).isEqualTo(4);
+        assertThat(candidates.get(0).availabilityPercent()).isEqualTo(20);
     }
 
     private void leave(String employeeId, LeaveStatus status, LocalDate start, LocalDate end) {

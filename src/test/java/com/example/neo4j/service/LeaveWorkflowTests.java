@@ -3,6 +3,8 @@ package com.example.neo4j.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.neo4j.dto.CreateHolidayRequest;
+import com.example.neo4j.dto.CreateOfficeRequest;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -50,6 +52,9 @@ class LeaveWorkflowTests extends SharedNeo4jTest {
 
     @Autowired
     AppUserRepository users;
+
+    @Autowired
+    OfficeService offices;
 
     @Autowired
     AuditLog auditLog;
@@ -178,6 +183,28 @@ class LeaveWorkflowTests extends SharedNeo4jTest {
 
         // Someone else's leave on the same days is fine.
         assertThat(request("sam", LeaveType.ANNUAL, MON, FRI).status()).isEqualTo(LeaveStatus.PENDING);
+    }
+
+    @Test
+    void officeHolidaysDontCountAsLeave() {
+        // Dev's office closes on Wednesday 6 March 2030.
+        String office = offices.create(new CreateOfficeRequest("BLR-01", "Bengaluru office", "Bengaluru", "India",
+                null, 100)).id();
+        offices.addHoliday(office, new CreateHolidayRequest(MON.plusDays(2), "Holi"));
+        employees.assignOffice(dev, office);
+
+        LeaveRequestResponse week = request("dev", LeaveType.ANNUAL, MON, FRI);
+        assertThat(week.workingDays()).isEqualTo(4);
+        assertThat(leave.balance(dev, 2030).pendingDays()).isEqualTo(4);
+
+        // Sam isn't in that office, so the same Wednesday is a working day for him.
+        assertThat(request("sam", LeaveType.ANNUAL, MON.plusDays(2), MON.plusDays(2)).workingDays()).isEqualTo(1);
+
+        // Asking only for a holiday asks for no working days.
+        LocalDate nextHoliday = MON.plusWeeks(1).plusDays(2);
+        offices.addHoliday(office, new CreateHolidayRequest(nextHoliday, "Office closed"));
+        assertThatThrownBy(() -> request("dev", LeaveType.SICK, nextHoliday, nextHoliday))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("office holidays");
     }
 
     @Test

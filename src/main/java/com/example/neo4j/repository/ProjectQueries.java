@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.neo4j.driver.Record;
 import org.neo4j.driver.Value;
@@ -81,6 +82,8 @@ public class ProjectQueries {
                        WHERE p.status IN %s AND w.startDate <= $to AND (w.endDate IS NULL OR w.endDate >= $from)
                        | {startDate: w.startDate, endDate: w.endDate, allocationPercent: w.allocationPercent}]
                        AS bookings,
+                   [(e)-[:LOCATED_AT]->(:Office)-[:OBSERVES]->(h:Holiday) WHERE h.date >= $from AND h.date <= $to
+                       | h.date] AS holidays,
                    COLLECT {
                        MATCH (l:LeaveRequest {employeeId: e.id})
                        WHERE l.status IN ['APPROVED', 'PENDING'] AND l.startDate <= $to AND l.endDate >= $from
@@ -98,7 +101,8 @@ public class ProjectQueries {
 
     /** Someone who could join a project, before their capacity and leave in the window are worked out. */
     public record CandidateRow(EmployeeSummary employee, double score, List<SkillMatch> skills,
-                               boolean inOwningDepartment, List<Booking> bookings, List<LeaveQueries.Period> leave) {
+                               boolean inOwningDepartment, List<Booking> bookings, List<LeaveQueries.Period> leave,
+                               Set<LocalDate> holidays) {
     }
 
     private final Neo4jClient client;
@@ -450,6 +454,7 @@ public class ProjectQueries {
                 skills,
                 record.get("inOwningDepartment").asBoolean(),
                 bookings,
-                leave);
+                leave,
+                Set.copyOf(record.get("holidays").asList(EmployeeQueries::date)));
     }
 }

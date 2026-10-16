@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
@@ -43,7 +44,7 @@ import com.example.neo4j.security.CurrentUser;
  * Leave workflow: an employee requests time off for themselves, and a manager above them in the
  * org chart (at any depth) or HR approves or rejects it.
  *
- * - Leave is counted in working days (Monday to Friday).
+ * - Leave is counted in working days: Monday to Friday, minus the employee's office holidays.
  * - Nobody can have two pending or approved requests on the same day.
  * - ANNUAL leave must fit the yearly allowance. Pending requests count too when asking, so
  *   people can't queue more than they have; approval checks again against approved leave.
@@ -137,8 +138,10 @@ public class LeaveService {
 			throw new ResourceNotFoundException("Employee not found with id: " + employeeId);
 		}
 
-		int approved = annualDaysUsed(employeeId, year, List.of(LeaveStatus.APPROVED));
-		int pending = annualDaysUsed(employeeId, year, List.of(LeaveStatus.PENDING));
+		Set<LocalDate> holidays = leaveQueries.holidayDates(employeeId, LocalDate.of(year, 1, 1),
+				LocalDate.of(year, 12, 31));
+		int approved = annualDaysUsed(employeeId, year, List.of(LeaveStatus.APPROVED), holidays);
+		int pending = annualDaysUsed(employeeId, year, List.of(LeaveStatus.PENDING), holidays);
 		return new LeaveBalanceResponse(employeeId, year, annualAllowanceDays, approved, pending,
 				annualAllowanceDays - approved - pending);
 	}
@@ -162,9 +165,9 @@ public class LeaveService {
 		if (ChronoUnit.DAYS.between(start, end) >= 366) {
 			throw new IllegalArgumentException("Leave can be at most a year long; request it in parts");
 		}
-		int workingDays = WorkingDays.between(start, end);
+		int workingDays = WorkingDays.between(start, end, leaveQueries.holidayDates(employeeId, start, end));
 		if (workingDays == 0) {
-			throw new IllegalArgumentException("These dates have no working days");
+			throw new IllegalArgumentException("These dates have no working days (weekends or office holidays)");
 		}
 
 		leaveQueries.lockEmployee(employeeId);
@@ -273,9 +276,11 @@ public class LeaveService {
 	}
 
 	private void requireAllowance(String employeeId, LocalDate start, LocalDate end, List<LeaveStatus> counted) {
+		Set<LocalDate> holidays = leaveQueries.holidayDates(employeeId, LocalDate.of(start.getYear(), 1, 1),
+				LocalDate.of(end.getYear(), 12, 31));
 		for (int year = start.getYear(); year <= end.getYear(); year++) {
-			int requested = WorkingDays.inYear(year, start, end);
-			int used = annualDaysUsed(employeeId, year, counted);
+			int requested = WorkingDays.inYear(year, start, end, holidays);
+			int used = annualDaysUsed(employeeId, year, counted, holidays);
 			if (used + requested > annualAllowanceDays) {
 				throw new ConflictException("Not enough annual leave in " + year + ": "
 						+ Math.max(0, annualAllowanceDays - used) + " of " + annualAllowanceDays + " days left, "
@@ -284,11 +289,11 @@ public class LeaveService {
 		}
 	}
 
-	// Working days of ANNUAL leave with these statuses that fall in the year.
-	private int annualDaysUsed(String employeeId, int year, List<LeaveStatus> statuses) {
+	// Working days of ANNUAL leave with these statuses that fall in the year, skipping office holidays.
+	private int annualDaysUsed(String employeeId, int year, List<LeaveStatus> statuses, Set<LocalDate> holidays) {
 		return leaveQueries.periods(employeeId, LeaveType.ANNUAL, statuses,
 						LocalDate.of(year, 1, 1), LocalDate.of(year, 12, 31)).stream()
-				.mapToInt(period -> WorkingDays.inYear(year, period.startDate(), period.endDate()))
+				.mapToInt(period -> WorkingDays.inYear(year, period.startDate(), period.endDate(), holidays))
 				.sum();
 	}
 
