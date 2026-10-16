@@ -6,21 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.LocalDate;
 import java.util.List;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.neo4j.harness.Neo4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import com.example.neo4j.audit.AuditAction;
 import com.example.neo4j.audit.AuditEventResponse;
@@ -37,37 +30,17 @@ import com.example.neo4j.entity.LeaveStatus;
 import com.example.neo4j.entity.LeaveType;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.repository.AppUserRepository;
-import com.example.neo4j.repository.EmployeeQueries;
-import com.example.neo4j.repository.LeaveQueries;
-import com.example.neo4j.repository.ProjectQueries;
-import com.example.neo4j.support.EmbeddedNeo4j;
-
-import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
+import com.example.neo4j.support.ServiceTest;
+import com.example.neo4j.support.SharedNeo4jTest;
 
 /**
  * The leave workflow against an embedded Neo4j: an employee requests, a manager above them or HR
- * decides. Each test runs in a transaction that is rolled back.
+ * decides.
  *
  * Dates are in 2030 so "hasn't started yet" doesn't depend on today. 4 March 2030 is a Monday.
  */
-@DataNeo4jTest
-@ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({LeaveService.class, EmployeeService.class, LeaveQueries.class, EmployeeQueries.class,
-        ProjectQueries.class, AuditLog.class})
-class LeaveWorkflowTests {
-
-    private static final Neo4j neo4j = EmbeddedNeo4j.start();
-
-    @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
-        EmbeddedNeo4j.register(registry, neo4j);
-        registry.add("app.leave.annual-allowance-days", () -> "20");
-    }
-
-    @AfterAll
-    static void stopNeo4j() {
-        neo4j.close();
-    }
+@ServiceTest
+class LeaveWorkflowTests extends SharedNeo4jTest {
 
     @Autowired
     LeaveService leave;

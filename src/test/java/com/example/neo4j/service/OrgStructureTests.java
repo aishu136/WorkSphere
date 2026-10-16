@@ -6,19 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.LocalDate;
 import java.util.List;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.neo4j.harness.Neo4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
-import com.example.neo4j.audit.AuditLog;
 import com.example.neo4j.dto.CreateDepartmentRequest;
 import com.example.neo4j.dto.CreateEmployeeRequest;
 import com.example.neo4j.dto.DepartmentResponse;
@@ -32,35 +24,15 @@ import com.example.neo4j.entity.EmploymentStatus;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.exception.ResourceNotFoundException;
 import com.example.neo4j.repository.CompanyRepository;
-import com.example.neo4j.repository.DepartmentQueries;
-import com.example.neo4j.repository.EmployeeQueries;
-import com.example.neo4j.repository.LeaveQueries;
-import com.example.neo4j.repository.ProjectQueries;
-import com.example.neo4j.support.EmbeddedNeo4j;
-
-import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
+import com.example.neo4j.support.ServiceTest;
+import com.example.neo4j.support.SharedNeo4jTest;
 
 /**
  * Service-level tests against an embedded Neo4j with the real migrations applied.
  * Each test runs in a transaction that is rolled back, so tests don't affect each other.
  */
-@DataNeo4jTest
-@ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({EmployeeService.class, DepartmentService.class, EmployeeQueries.class, LeaveQueries.class, DepartmentQueries.class,
-        ProjectQueries.class, AuditLog.class})
-class OrgStructureTests {
-
-    private static final Neo4j neo4j = EmbeddedNeo4j.start();
-
-    @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
-        EmbeddedNeo4j.register(registry, neo4j);
-    }
-
-    @AfterAll
-    static void stopNeo4j() {
-        neo4j.close();
-    }
+@ServiceTest
+class OrgStructureTests extends SharedNeo4jTest {
 
     @Autowired
     EmployeeService employees;

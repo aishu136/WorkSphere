@@ -9,53 +9,25 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.neo4j.harness.Neo4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.neo4j.core.Neo4jClient;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
-import com.example.neo4j.audit.AuditLog;
 import com.example.neo4j.dto.CreateDepartmentRequest;
 import com.example.neo4j.dto.CreateEmployeeRequest;
 import com.example.neo4j.dto.EmployeeSummary;
 import com.example.neo4j.dto.HistoryPeriod;
 import com.example.neo4j.dto.ReportingHistoryResponse;
 import com.example.neo4j.exception.ResourceNotFoundException;
-import com.example.neo4j.repository.DepartmentQueries;
-import com.example.neo4j.repository.EmployeeQueries;
-import com.example.neo4j.repository.LeaveQueries;
-import com.example.neo4j.repository.ProjectQueries;
-import com.example.neo4j.support.EmbeddedNeo4j;
-
-import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
+import com.example.neo4j.support.ServiceTest;
+import com.example.neo4j.support.SharedNeo4jTest;
 
 /**
  * The org chart over time, rebuilt from the audit trail, against an embedded Neo4j.
- * Each test runs in a transaction that is rolled back.
+ *
  */
-@DataNeo4jTest
-@ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({OrgHistoryService.class, EmployeeService.class, DepartmentService.class, EmployeeQueries.class,
-        DepartmentQueries.class, LeaveQueries.class, ProjectQueries.class, AuditLog.class})
-class OrgHistoryTests {
-
-    private static final Neo4j neo4j = EmbeddedNeo4j.start();
-
-    @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
-        EmbeddedNeo4j.register(registry, neo4j);
-    }
-
-    @AfterAll
-    static void stopNeo4j() {
-        neo4j.close();
-    }
+@ServiceTest
+class OrgHistoryTests extends SharedNeo4jTest {
 
     @Autowired
     OrgHistoryService history;

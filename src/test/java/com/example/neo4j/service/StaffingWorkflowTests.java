@@ -6,20 +6,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.LocalDate;
 import java.util.List;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.neo4j.harness.Neo4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import com.example.neo4j.audit.AuditAction;
 import com.example.neo4j.audit.AuditEventResponse;
@@ -37,35 +30,16 @@ import com.example.neo4j.entity.StaffingAction;
 import com.example.neo4j.entity.StaffingRequestStatus;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.repository.AppUserRepository;
-import com.example.neo4j.repository.EmployeeQueries;
-import com.example.neo4j.repository.LeaveQueries;
 import com.example.neo4j.repository.ProjectQueries;
-import com.example.neo4j.repository.StaffingQueries;
-import com.example.neo4j.support.EmbeddedNeo4j;
-
-import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
+import com.example.neo4j.support.ServiceTest;
+import com.example.neo4j.support.SharedNeo4jTest;
 
 /**
  * The staffing approval workflow against an embedded Neo4j: a project lead requests,
- * HR approves or rejects. Each test runs in a transaction that is rolled back.
+ * HR approves or rejects.
  */
-@DataNeo4jTest
-@ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({StaffingService.class, ProjectService.class, EmployeeService.class, StaffingQueries.class,
-        ProjectQueries.class, EmployeeQueries.class, LeaveQueries.class, AuditLog.class})
-class StaffingWorkflowTests {
-
-    private static final Neo4j neo4j = EmbeddedNeo4j.start();
-
-    @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
-        EmbeddedNeo4j.register(registry, neo4j);
-    }
-
-    @AfterAll
-    static void stopNeo4j() {
-        neo4j.close();
-    }
+@ServiceTest
+class StaffingWorkflowTests extends SharedNeo4jTest {
 
     @AfterEach
     void clearUser() {

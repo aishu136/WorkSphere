@@ -5,16 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDate;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.neo4j.harness.Neo4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import com.example.neo4j.dto.AssignmentRequest;
 import com.example.neo4j.dto.CreateEmployeeRequest;
@@ -25,35 +18,16 @@ import com.example.neo4j.dto.EmployeeResponse;
 import com.example.neo4j.dto.ProjectMemberResponse;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.exception.ConflictException;
-import com.example.neo4j.repository.EmployeeQueries;
-import com.example.neo4j.repository.LeaveQueries;
-import com.example.neo4j.repository.ProjectQueries;
-import com.example.neo4j.support.EmbeddedNeo4j;
-
-import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
+import com.example.neo4j.support.ServiceTest;
+import com.example.neo4j.support.SharedNeo4jTest;
 
 /**
  * Time-bound allocations against an embedded Neo4j: the 100% rule holds on every day, not in
  * total. Dates are in 2030 so they don't depend on today. Each test runs in a transaction that is
  * rolled back.
  */
-@DataNeo4jTest
-@ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({EmployeeService.class, ProjectService.class, EmployeeQueries.class, LeaveQueries.class,
-        ProjectQueries.class, com.example.neo4j.audit.AuditLog.class})
-class AllocationOverTimeTests {
-
-    private static final Neo4j neo4j = EmbeddedNeo4j.start();
-
-    @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
-        EmbeddedNeo4j.register(registry, neo4j);
-    }
-
-    @AfterAll
-    static void stopNeo4j() {
-        neo4j.close();
-    }
+@ServiceTest
+class AllocationOverTimeTests extends SharedNeo4jTest {
 
     @Autowired
     EmployeeService employees;

@@ -7,17 +7,10 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.neo4j.harness.Neo4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import com.example.neo4j.audit.AuditAction;
 import com.example.neo4j.audit.AuditEventResponse;
@@ -40,36 +33,16 @@ import com.example.neo4j.entity.LeaveStatus;
 import com.example.neo4j.entity.LeaveType;
 import com.example.neo4j.entity.ProjectStatus;
 import com.example.neo4j.exception.ConflictException;
-import com.example.neo4j.repository.DepartmentQueries;
-import com.example.neo4j.repository.EmployeeQueries;
-import com.example.neo4j.repository.LeaveQueries;
 import com.example.neo4j.repository.LeaveRequestRepository;
-import com.example.neo4j.repository.ProjectQueries;
-import com.example.neo4j.support.EmbeddedNeo4j;
-
-import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
+import com.example.neo4j.support.ServiceTest;
+import com.example.neo4j.support.SharedNeo4jTest;
 
 /**
  * Skill levels, project required skills and candidate matching against an embedded Neo4j
- * with migrations applied. Each test runs in a transaction that is rolled back.
+ * with migrations applied.
  */
-@DataNeo4jTest
-@ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({EmployeeService.class, DepartmentService.class, ProjectService.class,
-        EmployeeQueries.class, LeaveQueries.class, DepartmentQueries.class, ProjectQueries.class, AuditLog.class})
-class SkillMatchingTests {
-
-    private static final Neo4j neo4j = EmbeddedNeo4j.start();
-
-    @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
-        EmbeddedNeo4j.register(registry, neo4j);
-    }
-
-    @AfterAll
-    static void stopNeo4j() {
-        neo4j.close();
-    }
+@ServiceTest
+class SkillMatchingTests extends SharedNeo4jTest {
 
     @Autowired
     EmployeeService employees;

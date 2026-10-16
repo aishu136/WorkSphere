@@ -570,7 +570,10 @@ already been applied.
 ```
 
 The tests run against an **embedded Neo4j** started inside the test process. You don't need Docker or
-access to Aura to run them. They cover:
+access to Aura to run them. Service tests marked `@ServiceTest` (and extending `SharedNeo4jTest`) share one
+database and one Spring context, so the database starts and the migrations run once. Each test rolls
+back its own changes. Tests that need committed data or old-format data before migrations keep a
+database of their own. They cover:
 
 - **Web layer:** authentication, role and team permissions, validation and paging.
 - **Services:** reporting and department cycles, termination rules, directory filters, uniqueness.

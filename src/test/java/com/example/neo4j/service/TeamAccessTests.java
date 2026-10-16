@@ -6,34 +6,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.LocalDate;
 import java.util.Set;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.neo4j.harness.Neo4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
-import com.example.neo4j.audit.AuditLog;
 import com.example.neo4j.dto.CreateEmployeeRequest;
 import com.example.neo4j.dto.CreateUserRequest;
 import com.example.neo4j.entity.AppUser;
 import com.example.neo4j.exception.ConflictException;
 import com.example.neo4j.repository.AppUserRepository;
-import com.example.neo4j.repository.DepartmentQueries;
 import com.example.neo4j.repository.EmployeeQueries;
-import com.example.neo4j.repository.LeaveQueries;
-import com.example.neo4j.repository.ProjectQueries;
 import com.example.neo4j.security.Role;
-import com.example.neo4j.support.EmbeddedNeo4j;
-
-import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsAutoConfiguration;
+import com.example.neo4j.support.ServiceTest;
+import com.example.neo4j.support.SharedNeo4jTest;
 
 /**
  * The org-chart team check and login linking, against an embedded Neo4j. Org used in each test:
@@ -44,31 +28,8 @@ import ac.simons.neo4j.migrations.springframework.boot.autoconfigure.MigrationsA
  *        |          |
  *       dev      stranger
  */
-@DataNeo4jTest
-@ImportAutoConfiguration(MigrationsAutoConfiguration.class)
-@Import({UserService.class, EmployeeService.class, EmployeeQueries.class, LeaveQueries.class, DepartmentQueries.class,
-        ProjectQueries.class, AuditLog.class, TeamAccessTests.Passwords.class})
-class TeamAccessTests {
-
-    @TestConfiguration
-    static class Passwords {
-        @Bean
-        PasswordEncoder passwordEncoder() {
-            return PasswordEncoderFactories.createDelegatingPasswordEncoder();
-        }
-    }
-
-    private static final Neo4j neo4j = EmbeddedNeo4j.start();
-
-    @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
-        EmbeddedNeo4j.register(registry, neo4j);
-    }
-
-    @AfterAll
-    static void stopNeo4j() {
-        neo4j.close();
-    }
+@ServiceTest
+class TeamAccessTests extends SharedNeo4jTest {
 
     @Autowired
     UserService users;

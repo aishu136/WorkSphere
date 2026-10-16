@@ -7,7 +7,23 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 /** Starts an in-process Neo4j for tests, optionally pre-loaded with Cypher fixture statements. */
 public final class EmbeddedNeo4j {
 
+    private static Neo4j shared;
+
     private EmbeddedNeo4j() {
+    }
+
+    /**
+     * One empty database for every test class whose tests roll back (see SharedNeo4jTest), started on
+     * first use and stopped when the test JVM exits. Starting a database and running the migrations is
+     * the slowest part of a test class, so sharing it saves most of the suite's time and memory.
+     */
+    public static synchronized Neo4j shared() {
+        if (shared == null) {
+            shared = start();
+            Neo4j server = shared;
+            Runtime.getRuntime().addShutdownHook(new Thread(server::close, "embedded-neo4j-shutdown"));
+        }
+        return shared;
     }
 
     public static Neo4j start(String... fixtureStatements) {
